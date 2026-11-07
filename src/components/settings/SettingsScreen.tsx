@@ -5,6 +5,7 @@ import { ApiKeyPanel } from "@/components/settings/ApiKeyPanel";
 import { checkAIProvider } from "@/services/chatStream";
 import { isSpeechOutputSupported } from "@/services/voice";
 import { APP_VERSION } from "@/lib/defaults";
+import { KeoNative } from "@/services/native/keoNative";
 import type { AppSettings, Language, Theme } from "@/types/chat";
 
 interface SettingsScreenProps {
@@ -13,6 +14,7 @@ interface SettingsScreenProps {
   onUpdate: (patch: Partial<AppSettings>) => Promise<boolean>;
   onClearAll: () => Promise<void>;
   onBack: () => void;
+  onOpenWizard?: () => void;
 }
 
 const LANGUAGES: { value: Language; label: string }[] = [
@@ -92,10 +94,26 @@ function Segmented<T extends string | number>({ value, options, onChange, label 
   );
 }
 
-export function SettingsScreen({ settings, conversationCount, onUpdate, onClearAll, onBack }: SettingsScreenProps) {
+export function SettingsScreen({ settings, conversationCount, onUpdate, onClearAll, onBack, onOpenWizard }: SettingsScreenProps) {
   const [confirmClear, setConfirmClear] = useState(false);
   const [providerStatus, setProviderStatus] = useState<{ ok: boolean; message: string } | null>(null);
   const [checking, setChecking] = useState(false);
+  const [permStatus, setPermStatus] = useState<{ accessibility: boolean; notification: boolean; camera: boolean } | null>(null);
+
+  const checkPerms = async () => {
+    try {
+      const acc = await KeoNative.isAccessibilityEnabled();
+      const notif = await KeoNative.checkPermission({ permission: "notifications" });
+      const cam = await KeoNative.checkPermission({ permission: "camera" });
+      setPermStatus({
+        accessibility: acc.enabled,
+        notification: notif.state === "granted",
+        camera: cam.state === "granted",
+      });
+    } catch {
+      setPermStatus(null);
+    }
+  };
 
   const testProvider = async () => {
     setChecking(true);
@@ -125,6 +143,27 @@ export function SettingsScreen({ settings, conversationCount, onUpdate, onClearA
             options={themeOptions}
             onChange={(theme) => void onUpdate({ theme })}
           />
+        </Row>
+      </Section>
+
+      <Section title="Android Personal Assistant Setup" description="Configure permissions and accessibility for voice control, device actions, and native UI automation.">
+        <Row label="Permission Wizard" hint="Run the step-by-step assistant permission guide.">
+          <button
+            type="button"
+            onClick={() => onOpenWizard ? onOpenWizard() : void checkPerms()}
+            className="btn-accent text-xs font-medium !py-2 !px-4"
+          >
+            Launch Setup Wizard
+          </button>
+        </Row>
+        <Row label="Accessibility Automation Service" hint="Required for KEO Agent to open apps and perform UI actions.">
+          <button
+            type="button"
+            onClick={() => void KeoNative.openScreen({ screen: "accessibility" })}
+            className="btn-ghost text-xs !py-1.5 !px-3"
+          >
+            {permStatus?.accessibility ? "Active" : "Open Android Settings"}
+          </button>
         </Row>
       </Section>
 

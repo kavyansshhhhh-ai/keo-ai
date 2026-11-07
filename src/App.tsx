@@ -4,11 +4,13 @@ import { AppHeader } from "@/components/layout/AppHeader";
 import { HistoryPanel } from "@/components/history/HistoryPanel";
 import { ProfileDialog } from "@/components/profile/ProfileDialog";
 import { SettingsScreen } from "@/components/settings/SettingsScreen";
+import { PermissionWizard } from "@/components/onboarding/PermissionWizard";
 import { useChatThread } from "@/hooks/useChatThread";
 import { useConversations } from "@/hooks/useConversations";
 import { useSettings } from "@/hooks/useSettings";
 import { errorMessage } from "@/lib/errors";
 import { updateConversation } from "@/services/chatRepository";
+import { isNativeApp } from "@/services/native/keoNative";
 import type { ChatMode, Conversation } from "@/types/chat";
 
 type Screen = "chat" | "settings";
@@ -23,6 +25,9 @@ export default function App() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [online, setOnline] = useState(() => navigator.onLine);
+  const [showWizard, setShowWizard] = useState(() => {
+    return isNativeApp() && !localStorage.getItem("keo_onboarding_completed");
+  });
 
   useEffect(() => {
     const goOnline = () => setOnline(true);
@@ -86,10 +91,16 @@ export default function App() {
     if (!saved) throw new Error("Could not save your profile.");
   };
 
+  const finishWizard = () => {
+    localStorage.setItem("keo_onboarding_completed", "true");
+    setShowWizard(false);
+  };
+
   const bannerMessage = settingsError ?? notice;
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-bg text-fg">
+      {showWizard && <PermissionWizard onComplete={finishWizard} />}
       <div
         aria-hidden
         className="pointer-events-none fixed inset-x-0 top-0 h-80 bg-[radial-gradient(ellipse_at_top,rgb(var(--accent)/0.10),transparent_70%)]"
@@ -138,6 +149,7 @@ export default function App() {
                 onUpdate={updateSettings}
                 onClearAll={clearAllHistory}
                 onBack={() => setScreen("chat")}
+                onOpenWizard={() => setShowWizard(true)}
               />
             </div>
           ) : (

@@ -30,6 +30,7 @@ const ICONS: Record<AgentActionKind, LucideIcon> = {
   open_bluetooth_settings: Bluetooth,
   draft_email: Mail,
   prepare_whatsapp: MessageSquare,
+  send_whatsapp: MessageSquare,
   flashlight: Flashlight,
   battery: Battery,
   share: Share2,

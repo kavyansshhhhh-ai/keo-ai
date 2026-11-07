@@ -1,8 +1,9 @@
 import { errorMessage } from "@/lib/errors";
 import { readBattery, setFlashlight, shareText } from "@/services/agent/deviceTools";
 import { parseCommand } from "@/services/agent/parseCommand";
+import { routeCommandFast } from "@/services/agent/fastCommandRouter";
 import { KeoNative, isNativeApp, type NativeScreen } from "@/services/native/keoNative";
-import type { ActionOutcome, AgentAction, AgentActionKind } from "@/types/chat";
+import type { ActionOutcome, AgentAction } from "@/types/chat";
 
 export type TurnPlan =
   | { type: "reply"; content: string }
@@ -12,11 +13,16 @@ export type TurnPlan =
 const ANDROID_ONLY_DETAIL =
   "This action needs an Android phone. It can't run on this device.";
 
-const NATIVE_SCREENS: Partial<Record<AgentActionKind, NativeScreen>> = {
+const NATIVE_SCREENS: Partial<Record<string, NativeScreen>> = {
   open_wifi_settings: "wifi",
   open_bluetooth_settings: "bluetooth",
+  open_location_settings: "location",
+  open_sound_settings: "sound",
+  open_notification_settings: "notifications",
+  open_battery_settings: "battery",
   open_settings: "settings",
   open_camera: "camera",
+  open_gallery: "gallery",
 };
 
 function isAndroidDevice(): boolean {
@@ -55,6 +61,16 @@ async function openInNativeApp(action: AgentAction): Promise<ActionOutcome> {
       await KeoNative.openScreen({ screen });
       return { status: "done", detail: "Opened on your phone." };
     }
+    if (action.kind === "prepare_whatsapp" || action.kind === "send_whatsapp") {
+      const result = await KeoNative.performAccessibilityAction({
+        action: "sendWhatsAppMessage",
+        query: action.phone ?? action.target ?? "",
+        text: action.text ?? "",
+      });
+      if (result.success) {
+        return { status: "done", detail: result.detail ?? "WhatsApp message prepared on your phone." };
+      }
+    }
     if (action.androidPackage) {
       const { status } = await KeoNative.openApp({ packageName: action.androidPackage });
       if (status === "opened") return { status: "done", detail: "Opened on your phone." };
@@ -89,7 +105,9 @@ export async function executeAction(action: AgentAction): Promise<ActionOutcome>
 }
 
 export async function planAgentTurn(text: string): Promise<TurnPlan> {
-  const parsed = parseCommand(text);
+  const fastResult = routeCommandFast(text);
+  const parsed = fastResult.handledLocally ? fastResult.parsed : parseCommand(text);
+
   if (parsed.type === "none") return { type: "ai" };
   if (parsed.type === "clarify" || parsed.type === "unsupported") {
     return { type: "reply", content: parsed.message };

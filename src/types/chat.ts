@@ -21,6 +21,7 @@ export type AgentActionKind =
   | "open_bluetooth_settings"
   | "draft_email"
   | "prepare_whatsapp"
+  | "send_whatsapp"
   | "flashlight"
   | "battery"
   | "share"
@@ -36,6 +37,8 @@ export interface AgentAction {
   androidPackage?: string;
   torch?: boolean;
   text?: string;
+  phone?: string;
+  target?: string;
   requiresConfirmation: boolean;
   status: AgentActionStatus;
   detail?: string;
