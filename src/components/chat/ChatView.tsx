@@ -1,10 +1,11 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Composer } from "@/components/chat/Composer";
 import { MessageList } from "@/components/chat/MessageList";
 import { Welcome } from "@/components/chat/Welcome";
 import type { ChatThreadState } from "@/hooks/useChatThread";
 import { useVoiceInput } from "@/hooks/useVoiceInput";
+import { getLocalApiKey } from "@/services/providerKeyService";
 import type { ChatMode, Conversation, Language } from "@/types/chat";
 
 interface ChatViewProps {
@@ -15,11 +16,26 @@ interface ChatViewProps {
   recent: Conversation[];
   onChangeMode: (mode: ChatMode) => void;
   onOpenConversation: (conversation: Conversation) => void;
+  onOpenSettings?: () => void;
 }
 
 export function ChatView(props: ChatViewProps) {
-  const { thread, mode, language, displayName, recent, onChangeMode, onOpenConversation } = props;
+  const {
+    thread,
+    mode,
+    language,
+    displayName,
+    recent,
+    onChangeMode,
+    onOpenConversation,
+    onOpenSettings,
+  } = props;
   const [draft, setDraft] = useState("");
+  const [hasApiKey, setHasApiKey] = useState(() => Boolean(getLocalApiKey()));
+
+  useEffect(() => {
+    setHasApiKey(Boolean(getLocalApiKey()));
+  }, [thread.messages.length]);
 
   const sendText = thread.send;
   const handleVoiceResult = useCallback((text: string) => {
@@ -46,12 +62,14 @@ export function ChatView(props: ChatViewProps) {
           <Welcome
             mode={mode}
             displayName={displayName}
+            hasApiKey={hasApiKey}
             recent={recent}
             onPrompt={(prompt) => void thread.send(prompt)}
             onOpenConversation={onOpenConversation}
+            onOpenSettings={onOpenSettings}
           />
         ) : (
-          <MessageList thread={thread} disabled={busy} />
+          <MessageList thread={thread} disabled={busy} onOpenSettings={onOpenSettings} />
         )}
       </div>
       <Composer

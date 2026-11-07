@@ -1,7 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { AIProvider, ProviderError, StreamRequest } from "./types.ts";
 
-const MODELS = ["gemini-3.8-flash", "gemini-3.6-flash"] as const;
+const MODELS = ["gemini-2.5-flash", "gemini-1.5-flash"] as const;
 const ATTEMPT_TIMEOUT_MS = 30_000;
 
 const endpointFor = (model: string) =>

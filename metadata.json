@@ -1,0 +1,8 @@
+{
+  "name": "KEO AI",
+  "description": "KEO AI: your intelligent personal AI assistant and agent with voice and device actions.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -4,6 +4,15 @@ const config: CapacitorConfig = {
   appId: "com.keo.ai",
   appName: "KEO AI",
   webDir: "dist",
+  backgroundColor: "#000000",
+  server: {
+    androidScheme: "https",
+    cleartext: true,
+  },
+  android: {
+    allowMixedContent: true,
+    captureInput: true,
+  },
 };
 
 export default config;

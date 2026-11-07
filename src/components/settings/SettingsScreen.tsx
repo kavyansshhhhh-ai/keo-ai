@@ -153,16 +153,16 @@ export function SettingsScreen({ settings, conversationCount, onUpdate, onClearA
         </Row>
       </Section>
 
-      <Section title="AI provider" description="Replies come from Google Gemini through a secure server function. Add your Gemini API key below to turn KEO on.">
+      <Section title="Gemini API Key" description="Power KEO with your personal Google Gemini API key. Your key is saved strictly on this device and used directly for all AI features.">
         <ApiKeyPanel />
-        <Row label="Connection" hint={providerStatus?.message ?? "Check that the AI service is reachable and configured."}>
-          <button type="button" onClick={() => void testProvider()} disabled={checking} className="btn-ghost">
-            <Bot size={16} /> {checking ? "Testing..." : "Test connection"}
+        <Row label="Connection" hint={providerStatus?.message ?? "Verify that your saved key is active and connecting to Google Gemini."}>
+          <button type="button" onClick={() => void testProvider()} disabled={checking} className="btn-ghost !px-3.5 !py-2 text-xs">
+            <Bot size={15} /> {checking ? "Testing..." : "Test connection"}
           </button>
         </Row>
         {providerStatus && (
-          <p className={`text-sm ${providerStatus.ok ? "text-success-300" : "text-error-300"}`} role="status">
-            {providerStatus.ok ? "Connected." : "Not connected."} {providerStatus.ok ? providerStatus.message : ""}
+          <p className={`text-xs ${providerStatus.ok ? "text-emerald-400" : "text-rose-400"}`} role="status">
+            {providerStatus.ok ? "Connected: " : "Not connected: "} {providerStatus.message}
           </p>
         )}
       </Section>

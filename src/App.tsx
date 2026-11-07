@@ -149,6 +149,7 @@ export default function App() {
               recent={history.conversations.slice(0, 4)}
               onChangeMode={changeMode}
               onOpenConversation={openConversation}
+              onOpenSettings={() => setScreen("settings")}
             />
           )}
         </main>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { KeyRound } from "lucide-react";
+import { Check, ExternalLink, Eye, EyeOff, KeyRound, Loader2, Trash2 } from "lucide-react";
 import { errorMessage } from "@/lib/errors";
 import {
   fetchProviderKeyStatus,
@@ -10,20 +10,14 @@ import {
 
 type PendingAction = "saving" | "removing" | null;
 
-function describeSource(status: ProviderKeyStatus | null): string {
-  if (!status) return "Checking...";
-  if (status.source === "saved") return "Saved in KEO";
-  if (status.source === "environment") return "Set on the server";
-  return "Not set";
-}
-
 export function ApiKeyPanel() {
   const [status, setStatus] = useState<ProviderKeyStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [showKey, setShowKey] = useState(false);
   const [pending, setPending] = useState<PendingAction>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [justSaved, setJustSaved] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const loadStatus = useCallback(async () => {
     setLoadError(null);
@@ -44,11 +38,13 @@ export function ApiKeyPanel() {
     if (!apiKey || pending) return;
     setPending("saving");
     setActionError(null);
-    setJustSaved(false);
+    setSuccessMessage(null);
     try {
-      setStatus(await saveProviderKey(apiKey));
+      const nextStatus = await saveProviderKey(apiKey);
+      setStatus(nextStatus);
       setDraft("");
-      setJustSaved(true);
+      setShowKey(false);
+      setSuccessMessage("Gemini API key verified with Google and saved securely on your device.");
     } catch (err) {
       setActionError(errorMessage(err, "Could not save the key."));
     } finally {
@@ -60,10 +56,12 @@ export function ApiKeyPanel() {
     if (pending) return;
     setPending("removing");
     setActionError(null);
-    setJustSaved(false);
+    setSuccessMessage(null);
     try {
       await removeProviderKey();
       await loadStatus();
+      setDraft("");
+      setSuccessMessage("Gemini API key removed. Add a key to resume chatting.");
     } catch (err) {
       setActionError(errorMessage(err, "Could not remove the key."));
     } finally {
@@ -73,9 +71,9 @@ export function ApiKeyPanel() {
 
   if (loadError) {
     return (
-      <div role="alert" className="flex flex-col gap-3 rounded-xl border border-error-300/30 bg-error-500/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm text-error-300">{loadError}</p>
-        <button type="button" onClick={() => void loadStatus()} className="btn-ghost shrink-0">
+      <div role="alert" className="flex flex-col gap-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-rose-300">{loadError}</p>
+        <button type="button" onClick={() => void loadStatus()} className="btn-ghost shrink-0 text-xs">
           Try again
         </button>
       </div>
@@ -86,53 +84,122 @@ export function ApiKeyPanel() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-3 rounded-xl border border-line/10 bg-panel/5 px-4 py-3">
+      <div className="glass flex flex-col gap-3 rounded-2xl p-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-3">
-          <KeyRound size={18} className={configured ? "shrink-0 text-success-300" : "shrink-0 text-warning"} aria-hidden />
+          <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl border ${
+            configured ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" : "border-amber-500/30 bg-amber-500/10 text-amber-400"
+          }`}>
+            <KeyRound size={18} aria-hidden />
+          </div>
           <div className="min-w-0">
-            <p className="text-sm font-medium">{describeSource(status)}</p>
-            {status?.masked && <p className="font-mono text-xs text-muted">{status.masked}</p>}
+            <p className="text-sm font-semibold text-slate-100">
+              {configured ? "Active Key Configured" : "No API Key Set"}
+            </p>
+            {configured && status?.masked ? (
+              <p className="font-mono text-xs text-slate-400">{status.masked}</p>
+            ) : (
+              <p className="text-xs text-slate-400">Add your Google Gemini key below to begin chatting.</p>
+            )}
           </div>
         </div>
-        {status?.source === "saved" && (
-          <button type="button" onClick={() => void handleRemove()} disabled={pending !== null} className="btn-danger shrink-0">
-            {pending === "removing" ? "Removing..." : "Remove"}
+
+        {configured && (
+          <button
+            type="button"
+            onClick={() => void handleRemove()}
+            disabled={pending !== null}
+            className="btn-danger shrink-0 !px-3.5 !py-2 text-xs"
+            aria-label="Remove Gemini API key"
+          >
+            <Trash2 size={14} />
+            {pending === "removing" ? "Removing..." : "Remove Key"}
           </button>
         )}
       </div>
 
-      <form onSubmit={(event) => void handleSave(event)} className="flex flex-col gap-3 sm:flex-row">
-        <label htmlFor="gemini-api-key" className="sr-only">
-          Gemini API key
+      <div className="flex items-center justify-between px-1">
+        <label htmlFor="gemini-api-key" className="text-xs font-medium text-slate-300">
+          {configured ? "Update Gemini API Key" : "Enter Gemini API Key"}
         </label>
-        <input
-          id="gemini-api-key"
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder={configured ? "Paste a new key to replace it" : "Paste your Gemini API key"}
-          className="field min-w-0 flex-1 font-mono text-sm"
-        />
-        <button type="submit" disabled={!draft.trim() || pending !== null} className="btn-primary shrink-0">
-          {pending === "saving" ? "Verifying..." : "Save key"}
-        </button>
+        <a
+          href="https://aistudio.google.com/app/apikey"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-xs text-cyan-400 transition hover:underline"
+        >
+          <span>Get Free Gemini API Key</span>
+          <ExternalLink size={12} />
+        </a>
+      </div>
+
+      <form onSubmit={(event) => void handleSave(event)} className="flex flex-col gap-3">
+        <div className="relative flex items-center">
+          <input
+            id="gemini-api-key"
+            type={showKey ? "text" : "password"}
+            autoComplete="off"
+            spellCheck={false}
+            value={draft}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              if (actionError) setActionError(null);
+            }}
+            placeholder={configured ? "Paste a new key to update..." : "Paste your Gemini API key (AIzaSy...)"}
+            className="field min-w-0 flex-1 pr-11 font-mono text-sm"
+          />
+          <button
+            type="button"
+            onClick={() => setShowKey(!showKey)}
+            aria-label={showKey ? "Hide API key" : "Show API key"}
+            className="absolute right-2.5 grid h-7 w-7 place-items-center rounded-lg text-slate-400 transition hover:bg-white/10 hover:text-slate-100"
+          >
+            {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-slate-400">
+            Keys are stored privately on your device. Never shared or sent to any third party other than Google.
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              disabled={!draft.trim() || pending !== null}
+              className="btn-primary shrink-0 !px-4 !py-2 text-xs"
+            >
+              {pending === "saving" ? (
+                <>
+                  <Loader2 size={14} className="animate-spin" />
+                  <span>Validating...</span>
+                </>
+              ) : configured ? (
+                <>
+                  <Check size={14} />
+                  <span>Update Key</span>
+                </>
+              ) : (
+                <>
+                  <Check size={14} />
+                  <span>Save Key</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
       </form>
 
       {actionError && (
-        <p role="alert" className="text-sm text-error-300">
+        <div role="alert" className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs leading-relaxed text-rose-300">
+          <span className="font-semibold">Error: </span>
           {actionError}
-        </p>
+        </div>
       )}
-      {justSaved && (
-        <p role="status" className="text-sm text-success-300">
-          Key verified and saved. KEO is ready to chat.
-        </p>
+
+      {successMessage && (
+        <div role="status" className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs leading-relaxed text-emerald-300">
+          {successMessage}
+        </div>
       )}
-      <p className="text-xs leading-relaxed text-muted">
-        The key is stored on KEO's server, is never sent back to this browser, and is only shown as its last four characters.
-      </p>
     </div>
   );
 }

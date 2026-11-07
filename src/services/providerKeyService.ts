@@ -1,57 +1,107 @@
-import { FUNCTIONS_URL, SUPABASE_ANON_KEY } from "@/lib/supabase";
-
 export interface ProviderKeyStatus {
   configured: boolean;
-  source: "saved" | "environment" | null;
   masked: string | null;
 }
 
-const ENDPOINT = `${FUNCTIONS_URL}/provider-key`;
+const LOCAL_KEY_STORAGE = "keo_user_gemini_api_key";
 
-async function request(method: "GET" | "PUT" | "DELETE", body?: unknown): Promise<unknown> {
-  let response: Response;
+function maskKey(key: string): string {
+  if (key.length <= 6) return "••••••";
+  return `••••••••${key.slice(-4)}`;
+}
+
+/**
+ * Returns the user's saved Gemini API key stored locally in device private storage.
+ * Does NOT use any developer-owned fallback or shared key.
+ */
+export function getLocalApiKey(): string | null {
   try {
-    response = await fetch(ENDPOINT, {
-      method,
-      headers: {
-        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-        apikey: SUPABASE_ANON_KEY,
-        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    const val = localStorage.getItem(LOCAL_KEY_STORAGE);
+    return val && val.trim() ? val.trim() : null;
   } catch {
-    throw new Error("Could not reach KEO's server. Check your connection and try again.");
+    return null;
+  }
+}
+
+/**
+ * Returns the effective API key for chat requests.
+ * Uses ONLY the user's own saved key in accordance with BYOK requirements.
+ */
+export function getEffectiveApiKey(): string | null {
+  return getLocalApiKey();
+}
+
+/**
+ * Validates the Gemini API key directly against Google's Gemini models endpoint.
+ */
+export async function verifyGeminiKey(apiKey: string): Promise<boolean> {
+  const cleanKey = apiKey.trim();
+  if (!cleanKey) {
+    throw new Error("Please enter a Gemini API key.");
+  }
+  if (cleanKey.length < 15) {
+    throw new Error("The API key entered is too short to be a valid Gemini key.");
   }
 
-  const payload: unknown = await response.json().catch(() => null);
-  if (!response.ok) {
-    const message = (payload as { error?: unknown } | null)?.error;
-    throw new Error(typeof message === "string" && message ? message : `Request failed (${response.status}).`);
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash?key=${encodeURIComponent(cleanKey)}`;
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "GET" });
+  } catch {
+    throw new Error("Could not reach Google's servers. Please check your internet connection.");
   }
-  return payload;
+
+  if (res.status === 400 || res.status === 401 || res.status === 403) {
+    const data = await res.json().catch(() => null);
+    const msg = data?.error?.message || "Invalid or deactivated Gemini API key.";
+    throw new Error(`Google rejected the key: ${msg}`);
+  }
+
+  if (!res.ok) {
+    throw new Error(`Google Gemini returned status HTTP ${res.status}.`);
+  }
+
+  return true;
 }
 
-function isProviderKeyStatus(value: unknown): value is ProviderKeyStatus {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Record<string, unknown>;
-  return typeof candidate.configured === "boolean" && (candidate.masked === null || typeof candidate.masked === "string");
+export async function fetchProviderKeyStatus(): Promise<ProviderKeyStatus> {
+  const localKey = getLocalApiKey();
+  if (localKey) {
+    return {
+      configured: true,
+      masked: maskKey(localKey),
+    };
+  }
+
+  return {
+    configured: false,
+    masked: null,
+  };
 }
 
-async function requestStatus(method: "GET" | "PUT", body?: unknown): Promise<ProviderKeyStatus> {
-  const payload = await request(method, body);
-  if (!isProviderKeyStatus(payload)) throw new Error("KEO's server sent an unexpected response.");
-  return payload;
-}
+export async function saveProviderKey(apiKey: string): Promise<ProviderKeyStatus> {
+  const cleaned = apiKey.trim();
 
-export function fetchProviderKeyStatus(): Promise<ProviderKeyStatus> {
-  return requestStatus("GET");
-}
+  // Validate the key with Google Gemini API first
+  await verifyGeminiKey(cleaned);
 
-export function saveProviderKey(apiKey: string): Promise<ProviderKeyStatus> {
-  return requestStatus("PUT", { api_key: apiKey });
+  try {
+    localStorage.setItem(LOCAL_KEY_STORAGE, cleaned);
+  } catch (err) {
+    console.warn("[KEO] Failed to save key in local device storage:", err);
+    throw new Error("Failed to write to device local storage.");
+  }
+
+  return {
+    configured: true,
+    masked: maskKey(cleaned),
+  };
 }
 
 export async function removeProviderKey(): Promise<void> {
-  await request("DELETE");
+  try {
+    localStorage.removeItem(LOCAL_KEY_STORAGE);
+  } catch (err) {
+    console.warn("[KEO] Failed to remove key from local device storage:", err);
+  }
 }
