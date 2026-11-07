@@ -1,0 +1,13 @@
+{
+  "projectId": "72717094",
+  "functions": {
+    "chat": {
+      "hasChanged": false,
+      "hash": "7c4bcfe1a17a895929e7a1bda193c5aaed8ab66e566d31e8b207adee4907c112"
+    },
+    "provider-key": {
+      "hasChanged": false,
+      "hash": "d1408a9943cfbea023ee173bc2891d032506ffd1053d66762df82a5bdb73ccbd"
+    }
+  }
+}

@@ -1,0 +1,5 @@
+[functions.chat]
+verify_jwt = true
+
+[functions.provider-key]
+verify_jwt = true
