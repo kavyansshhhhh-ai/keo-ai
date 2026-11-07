@@ -6,7 +6,7 @@ import type { ChatThreadState } from "@/hooks/useChatThread";
 
 function TypingDots() {
   return (
-    <div className="flex gap-3 animate-fade-in" aria-label="KEO is typing">
+    <div className="flex gap-3 animate-message-in" aria-label="KEO is typing">
       <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-cyan-400/30 bg-cyan-400/10 text-cyan-400">
         <Sparkles size={16} />
       </div>
@@ -106,7 +106,7 @@ export function MessageList({
         (streamingText === "" ? (
           <TypingDots />
         ) : (
-          <div className="flex gap-3 animate-fade-in">
+          <div className="flex gap-3 animate-message-in">
             <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-cyan-400/30 bg-cyan-400/10 text-cyan-400">
               <Sparkles size={16} />
             </div>

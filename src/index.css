@@ -30,6 +30,21 @@
   --glass-border: rgba(15, 23, 42, 0.08);
 }
 
+@keyframes messageEntrance {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-message-in {
+  animation: messageEntrance 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
 @layer base {
   html,
   body,

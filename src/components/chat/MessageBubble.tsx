@@ -57,7 +57,7 @@ export function MessageBubble(props: MessageBubbleProps) {
 
   if (isUser) {
     return (
-      <div className="group flex justify-end animate-fade-in">
+      <div className="group flex justify-end animate-message-in">
         <div className="flex max-w-[88%] flex-col items-end gap-1 sm:max-w-[80%]">
           {editing ? (
             <div className="glass-strong w-full rounded-2xl p-3">
@@ -113,7 +113,7 @@ export function MessageBubble(props: MessageBubbleProps) {
   }
 
   return (
-    <div className="group flex gap-3 animate-fade-in">
+    <div className="group flex gap-3 animate-message-in">
       <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-accent/30 bg-accent/10 text-accent">
         <Sparkles size={16} />
       </div>

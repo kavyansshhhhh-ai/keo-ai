@@ -1,8 +1,7 @@
 import { FUNCTIONS_URL, SUPABASE_ANON_KEY } from "@/lib/supabase";
 import { getEffectiveApiKey } from "@/services/providerKeyService";
+import { getEffectiveModel, getCachedDiscoveredModels } from "@/services/modelDiscovery";
 import type { ChatMode, Language } from "@/types/chat";
-
-const GEMINI_MODELS = ["gemini-2.5-flash", "gemini-1.5-flash"] as const;
 
 export interface WireMessage {
   role: "user" | "assistant";
@@ -44,6 +43,11 @@ async function streamFromGeminiDirect(
 ): Promise<string> {
   const systemPrompt = buildSystemPrompt(options.mode, options.language);
 
+  // Dynamically determine the best effective model discovered for this user's key
+  const primaryModel = await getEffectiveModel(apiKey);
+  const cachedModels = getCachedDiscoveredModels();
+  const modelsToTry = Array.from(new Set([primaryModel, ...cachedModels, "gemini-2.5-flash", "gemini-1.5-flash"]));
+
   // Convert messages to Gemini format: user -> user, assistant -> model
   const contents = options.messages.map((m) => ({
     role: m.role === "assistant" ? "model" : "user",
@@ -63,7 +67,7 @@ async function streamFromGeminiDirect(
 
   let lastError: Error | null = null;
 
-  for (const model of GEMINI_MODELS) {
+  for (const model of modelsToTry) {
     try {
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
       const response = await fetch(endpoint, {
@@ -77,7 +81,6 @@ async function streamFromGeminiDirect(
       });
 
       if (response.status === 404) {
-        // Try fallback model
         lastError = new Error(`Model ${model} not available on this key.`);
         continue;
       }
@@ -132,7 +135,6 @@ async function streamFromGeminiDirect(
               }
             }
           } catch (jsonErr) {
-            // Non-JSON SSE event or syntax issue
             if (jsonErr instanceof Error && jsonErr.message.includes("Gemini")) {
               throw jsonErr;
             }
@@ -148,7 +150,7 @@ async function streamFromGeminiDirect(
     }
   }
 
-  throw lastError ?? new Error("Failed to contact Gemini service.");
+  throw lastError ?? new Error("Failed to contact Gemini service with discovered models.");
 }
 
 async function streamFromSupabaseBackend(
@@ -214,41 +216,35 @@ export async function streamChatReply(options: StreamOptions): Promise<string> {
     throw new Error("You appear to be offline. Check your internet connection and try again.");
   }
 
-  // 1. Check if user has an effective Gemini API key configured
   const apiKey = getEffectiveApiKey();
-
-  // If local/env Gemini key is present, call Gemini directly for lowest latency and reliable APK execution
   if (apiKey) {
     return streamFromGeminiDirect(apiKey, options);
   }
 
-  // 2. Fall back to Supabase Edge Function if available
   if (FUNCTIONS_URL && SUPABASE_ANON_KEY) {
     try {
       return await streamFromSupabaseBackend(FUNCTIONS_URL, SUPABASE_ANON_KEY, options);
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") throw err;
       throw new Error(
-        `AI service unavailable: ${err instanceof Error ? err.message : String(err)}. You can also provide your own Gemini API key directly in Settings.`
+        `AI service unavailable: ${err instanceof Error ? err.message : String(err)}. Please add your Gemini API key in Settings.`
       );
     }
   }
 
-  // 3. User key not configured
-  throw new Error(
-    "Please add your Gemini API key in Settings to start chatting."
-  );
+  throw new Error("Please add your Gemini API key in Settings to start chatting.");
 }
 
 export async function checkAIProvider(): Promise<{ ok: boolean; message: string }> {
   const apiKey = getEffectiveApiKey();
   if (apiKey) {
     try {
+      const model = await getEffectiveModel(apiKey);
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash?key=${encodeURIComponent(apiKey)}`
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}?key=${encodeURIComponent(apiKey)}`
       );
       if (res.ok) {
-        return { ok: true, message: "Connected to Google Gemini (gemini-2.5-flash)" };
+        return { ok: true, message: `Connected to Google Gemini (${model})` };
       }
       const data = await res.json().catch(() => null);
       return { ok: false, message: data?.error?.message || `HTTP ${res.status}` };

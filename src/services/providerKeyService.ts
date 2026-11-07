@@ -1,3 +1,5 @@
+import { discoverGeminiModels, selectBestFlashModel, setStoredSelectedModel } from "@/services/modelDiscovery";
+
 export interface ProviderKeyStatus {
   configured: boolean;
   masked: string | null;
@@ -12,7 +14,6 @@ function maskKey(key: string): string {
 
 /**
  * Returns the user's saved Gemini API key stored locally in device private storage.
- * Does NOT use any developer-owned fallback or shared key.
  */
 export function getLocalApiKey(): string | null {
   try {
@@ -25,16 +26,15 @@ export function getLocalApiKey(): string | null {
 
 /**
  * Returns the effective API key for chat requests.
- * Uses ONLY the user's own saved key in accordance with BYOK requirements.
  */
 export function getEffectiveApiKey(): string | null {
   return getLocalApiKey();
 }
 
 /**
- * Validates the Gemini API key directly against Google's Gemini models endpoint.
+ * Validates the Gemini API key directly against Google's Gemini models and discovery endpoints.
  */
-export async function verifyGeminiKey(apiKey: string): Promise<boolean> {
+export async function verifyGeminiKey(apiKey: string): Promise<string[]> {
   const cleanKey = apiKey.trim();
   if (!cleanKey) {
     throw new Error("Please enter a Gemini API key.");
@@ -43,25 +43,13 @@ export async function verifyGeminiKey(apiKey: string): Promise<boolean> {
     throw new Error("The API key entered is too short to be a valid Gemini key.");
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash?key=${encodeURIComponent(cleanKey)}`;
-  let res: Response;
-  try {
-    res = await fetch(url, { method: "GET" });
-  } catch {
-    throw new Error("Could not reach Google's servers. Please check your internet connection.");
+  // Discover and filter compatible models supporting generateContent for this specific key
+  const availableModels = await discoverGeminiModels(cleanKey);
+  if (!availableModels || availableModels.length === 0) {
+    throw new Error("No compatible Gemini models were found for this API key.");
   }
 
-  if (res.status === 400 || res.status === 401 || res.status === 403) {
-    const data = await res.json().catch(() => null);
-    const msg = data?.error?.message || "Invalid or deactivated Gemini API key.";
-    throw new Error(`Google rejected the key: ${msg}`);
-  }
-
-  if (!res.ok) {
-    throw new Error(`Google Gemini returned status HTTP ${res.status}.`);
-  }
-
-  return true;
+  return availableModels;
 }
 
 export async function fetchProviderKeyStatus(): Promise<ProviderKeyStatus> {
@@ -82,8 +70,12 @@ export async function fetchProviderKeyStatus(): Promise<ProviderKeyStatus> {
 export async function saveProviderKey(apiKey: string): Promise<ProviderKeyStatus> {
   const cleaned = apiKey.trim();
 
-  // Validate the key with Google Gemini API first
-  await verifyGeminiKey(cleaned);
+  // 1. Validate the key and discover available models specific to this key
+  const discoveredModels = await verifyGeminiKey(cleaned);
+
+  // 2. Automatically select and set the best supported stable Flash model
+  const bestModel = selectBestFlashModel(discoveredModels);
+  setStoredSelectedModel(bestModel);
 
   try {
     localStorage.setItem(LOCAL_KEY_STORAGE, cleaned);
@@ -101,6 +93,8 @@ export async function saveProviderKey(apiKey: string): Promise<ProviderKeyStatus
 export async function removeProviderKey(): Promise<void> {
   try {
     localStorage.removeItem(LOCAL_KEY_STORAGE);
+    localStorage.removeItem("keo_user_selected_model");
+    localStorage.removeItem("keo_discovered_models");
   } catch (err) {
     console.warn("[KEO] Failed to remove key from local device storage:", err);
   }
