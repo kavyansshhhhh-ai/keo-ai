@@ -225,9 +225,27 @@ public class KeoNativePlugin extends Plugin {
     @PluginMethod
     public void isAccessibilityEnabled(PluginCall call) {
         boolean running = KeoAccessibilityService.isServiceRunning();
+        boolean enabledInSettings = isAccessibilityServiceEnabledInSettings();
         JSObject result = new JSObject();
-        result.put("enabled", running);
+        result.put("enabled", running || enabledInSettings);
+        result.put("running", running);
+        result.put("enabledInSettings", enabledInSettings);
         call.resolve(result);
+    }
+
+    private boolean isAccessibilityServiceEnabledInSettings() {
+        Context context = getContext();
+        String expectedService = context.getPackageName() + "/" + KeoAccessibilityService.class.getCanonicalName();
+        String enabledServices = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        if (enabledServices != null) {
+            String[] services = enabledServices.split(":");
+            for (String service : services) {
+                if (service.equalsIgnoreCase(expectedService) || service.equalsIgnoreCase(context.getPackageName() + "/." + KeoAccessibilityService.class.getSimpleName())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     @PluginMethod
@@ -266,6 +284,16 @@ public class KeoNativePlugin extends Plugin {
                 result.put("success", false);
                 result.put("detail", "No editable input field found");
             }
+            call.resolve(result);
+            return;
+        }
+
+        if ("scrollForward".equals(action) || "scrollBackward".equals(action)) {
+            boolean forward = "scrollForward".equals(action);
+            AccessibilityNodeInfo root = service.getRootInActiveWindow();
+            boolean scrolled = service.performScrollNode(root, forward);
+            result.put("success", scrolled);
+            result.put("detail", scrolled ? (forward ? "Scrolled forward" : "Scrolled backward") : "Could not scroll current page");
             call.resolve(result);
             return;
         }

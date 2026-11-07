@@ -157,13 +157,23 @@ export function SettingsScreen({ settings, conversationCount, onUpdate, onClearA
           </button>
         </Row>
         <Row label="Accessibility Automation Service" hint="Required for KEO Agent to open apps and perform UI actions.">
-          <button
-            type="button"
-            onClick={() => void KeoNative.openScreen({ screen: "accessibility" })}
-            className="btn-ghost text-xs !py-1.5 !px-3"
-          >
-            {permStatus?.accessibility ? "Active" : "Open Android Settings"}
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => void KeoNative.openScreen({ screen: "accessibility" })}
+              className="btn-ghost text-xs !py-1.5 !px-3"
+            >
+              {permStatus?.accessibility ? "Active" : "Open Settings"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void KeoNative.openScreen({ screen: "appDetails" })}
+              className="btn-ghost text-xs !py-1.5 !px-3 text-amber-300 hover:text-amber-200"
+              title="If Android shows Restricted Setting, tap here, then tap 3-dots top right -> Allow restricted settings"
+            >
+              App Info (Restricted Fix)
+            </button>
+          </div>
         </Row>
       </Section>
 

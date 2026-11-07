@@ -30,7 +30,7 @@ interface KeoNativePlugin {
   getBatteryStatus(): Promise<{ level: number; charging: boolean; available: boolean }>;
   isAccessibilityEnabled(): Promise<{ enabled: boolean }>;
   performAccessibilityAction(options: {
-    action: "findAndClick" | "findAndType" | "navigateBack" | "readScreenText" | "sendWhatsAppMessage";
+    action: "findAndClick" | "findAndType" | "navigateBack" | "readScreenText" | "sendWhatsAppMessage" | "scrollForward" | "scrollBackward";
     query?: string;
     text?: string;
   }): Promise<{ success: boolean; detail?: string; textList?: string[] }>;

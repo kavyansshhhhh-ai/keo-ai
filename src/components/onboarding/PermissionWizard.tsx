@@ -280,6 +280,11 @@ export function PermissionWizard({ onComplete }: PermissionWizardProps) {
               KEO AI never collects passwords, OTPs, or financial credentials. Automation remains 100% visible and under your explicit control.
             </div>
 
+            <div className="rounded-2xl border border-amber-400/20 bg-amber-400/5 p-3 text-xs leading-relaxed text-amber-200/90">
+              <p className="font-semibold text-amber-300 mb-1">Android 13+ Restricted Setting Notice:</p>
+              If Android says "Restricted setting": Tap <b>Fix Restricted Setting</b> below, tap the 3 dots (⋮) in the top-right corner of App Info, select <b>"Allow restricted settings"</b>, enter your PIN/fingerprint, then return to turn on Accessibility.
+            </div>
+
             <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 p-3.5 text-xs">
               <span className="text-slate-300">Accessibility Service Status:</span>
               <span className={`font-semibold flex items-center gap-1.5 ${accessState === "granted" ? "text-emerald-400" : "text-amber-400"}`}>
@@ -295,17 +300,26 @@ export function PermissionWizard({ onComplete }: PermissionWizardProps) {
               </span>
             </div>
 
-            <div className="mt-2 flex flex-col gap-3">
+            <div className="mt-2 flex flex-col gap-2.5">
               {accessState !== "granted" && (
-                <button
-                  type="button"
-                  onClick={() => void handleOpenAccessibilitySettings()}
-                  className="btn-primary w-full justify-center !py-3 text-xs"
-                >
-                  Enable Accessibility in Android Settings
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenAccessibilitySettings()}
+                    className="btn-primary w-full justify-center !py-2.5 text-xs font-semibold"
+                  >
+                    1. Enable Accessibility in Android Settings
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void KeoNative.openScreen({ screen: "appDetails" })}
+                    className="btn-ghost w-full justify-center !py-2.5 text-xs border border-white/10 text-amber-300 hover:text-amber-200"
+                  >
+                    2. Fix Restricted Setting (App Info & 3 Dots)
+                  </button>
+                </>
               )}
-              <div className="flex justify-end gap-3">
+              <div className="flex justify-end gap-3 pt-2">
                 <button
                   type="button"
                   onClick={() => setStep(5)}

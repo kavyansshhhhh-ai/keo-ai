@@ -184,6 +184,19 @@ public class KeoAccessibilityService extends AccessibilityService {
         }
     }
 
+    public boolean performScrollNode(AccessibilityNodeInfo targetNode, boolean forward) {
+        if (targetNode == null) return false;
+        int action = forward ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
+        AccessibilityNodeInfo node = targetNode;
+        while (node != null) {
+            if ((node.getActions() & action) != 0) {
+                return node.performAction(action);
+            }
+            node = node.getParent();
+        }
+        return false;
+    }
+
     private boolean isClickableOrHasClickableParent(AccessibilityNodeInfo targetNode) {
         AccessibilityNodeInfo node = targetNode;
         while (node != null) {
