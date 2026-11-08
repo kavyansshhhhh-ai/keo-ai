@@ -342,7 +342,8 @@ public class KeoNativePlugin extends Plugin {
         if (ACCESSIBILITY.equals(permission)) {
             JSObject res = new JSObject();
             boolean running = KeoAccessibilityService.isServiceRunning();
-            res.put("state", running ? "granted" : "denied");
+            boolean enabledInSettings = isAccessibilityServiceEnabledInSettings();
+            res.put("state", (running || enabledInSettings) ? "granted" : "denied");
             call.resolve(res);
             return;
         }

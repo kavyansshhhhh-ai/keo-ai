@@ -116,7 +116,7 @@ export function PermissionWizard({ onComplete }: PermissionWizardProps) {
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xl p-4 sm:p-6 animate-fade-in"
     >
       <div className="glass-strong relative flex w-full max-w-lg flex-col overflow-hidden rounded-3xl border border-cyan-400/30 p-6 sm:p-8 shadow-2xl shadow-cyan-500/10">
-        {/* Step Indicator */}
+        {/* Step Indicator & Dismiss */}
         <div className="mb-6 flex items-center justify-between border-b border-white/10 pb-4">
           <div className="flex items-center gap-2">
             <span className="grid h-8 w-8 place-items-center rounded-xl bg-cyan-400/20 text-cyan-400 font-bold text-xs">
@@ -130,19 +130,29 @@ export function PermissionWizard({ onComplete }: PermissionWizardProps) {
               {step === 5 && "Setup Summary"}
             </span>
           </div>
-          <div className="flex gap-1.5">
-            {[1, 2, 3, 4, 5].map((s) => (
-              <span
-                key={s}
-                className={`h-1.5 rounded-full transition-all duration-300 ${
-                  s === step
-                    ? "w-6 bg-cyan-400"
-                    : s < step
-                    ? "w-2 bg-emerald-400"
-                    : "w-2 bg-white/20"
-                }`}
-              />
-            ))}
+          <div className="flex items-center gap-3">
+            <div className="flex gap-1.5 hidden sm:flex">
+              {[1, 2, 3, 4, 5].map((s) => (
+                <span
+                  key={s}
+                  className={`h-1.5 rounded-full transition-all duration-300 ${
+                    s === step
+                      ? "w-6 bg-cyan-400"
+                      : s < step
+                      ? "w-2 bg-emerald-400"
+                      : "w-2 bg-white/20"
+                  }`}
+                />
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={handleFinish}
+              className="text-xs font-medium text-slate-400 hover:text-slate-100 underline underline-offset-4"
+              title="Skip setup and open main chat directly"
+            >
+              Skip to Chat
+            </button>
           </div>
         </div>
 
