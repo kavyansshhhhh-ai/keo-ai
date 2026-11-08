@@ -9,14 +9,24 @@ export interface AppTarget {
 }
 
 export const APP_CATALOG: AppTarget[] = [
-  { key: "youtube", label: "YouTube", aliases: ["youtube", "yt"], web: "https://www.youtube.com", androidPackage: "com.google.android.youtube" },
-  { key: "whatsapp", label: "WhatsApp", aliases: ["whatsapp", "whats app"], web: "https://web.whatsapp.com", androidPackage: "com.whatsapp" },
-  { key: "chrome", label: "Chrome", aliases: ["chrome"], web: "https://www.google.com", androidPackage: "com.android.chrome" },
-  { key: "gmail", label: "Gmail", aliases: ["gmail"], web: "https://mail.google.com", androidPackage: "com.google.android.gm" },
-  { key: "maps", label: "Google Maps", aliases: ["maps", "google maps"], web: "https://www.google.com/maps", androidPackage: "com.google.android.apps.maps" },
+  { key: "youtube", label: "YouTube", aliases: ["youtube", "yt", "yutub"], web: "https://www.youtube.com", androidPackage: "com.google.android.youtube" },
+  { key: "whatsapp", label: "WhatsApp", aliases: ["whatsapp", "whats app", "watsapp"], web: "https://web.whatsapp.com", androidPackage: "com.whatsapp" },
+  { key: "chrome", label: "Chrome", aliases: ["chrome", "google chrome", "browser"], web: "https://www.google.com", androidPackage: "com.android.chrome" },
+  { key: "gmail", label: "Gmail", aliases: ["gmail", "email", "mail"], web: "https://mail.google.com", androidPackage: "com.google.android.gm" },
+  { key: "maps", label: "Google Maps", aliases: ["maps", "google maps", "map", "naksha"], web: "https://www.google.com/maps", androidPackage: "com.google.android.apps.maps" },
   { key: "instagram", label: "Instagram", aliases: ["instagram", "insta"], web: "https://www.instagram.com", androidPackage: "com.instagram.android" },
-  { key: "spotify", label: "Spotify", aliases: ["spotify"], web: "https://open.spotify.com", androidPackage: "com.spotify.music" },
+  { key: "spotify", label: "Spotify", aliases: ["spotify", "music", "gaana"], web: "https://open.spotify.com", androidPackage: "com.spotify.music" },
   { key: "play", label: "Play Store", aliases: ["play store", "playstore", "google play"], web: "https://play.google.com/store", androidPackage: "com.android.vending" },
+  { key: "phone", label: "Phone", aliases: ["phone", "dialer", "call", "phone dialer"], web: "https://www.google.com", androidPackage: "com.google.android.dialer" },
+  { key: "messages", label: "Messages", aliases: ["messages", "message", "sms"], web: "https://messages.google.com", androidPackage: "com.google.android.apps.messaging" },
+  { key: "camera", label: "Camera", aliases: ["camera", "kamera", "photo"], web: "https://www.google.com", androidPackage: "com.google.android.GoogleCamera" },
+  { key: "gallery", label: "Photos", aliases: ["photos", "gallery", "photo gallery"], web: "https://photos.google.com", androidPackage: "com.google.android.apps.photos" },
+  { key: "telegram", label: "Telegram", aliases: ["telegram"], web: "https://web.telegram.org", androidPackage: "org.telegram.messenger" },
+  { key: "facebook", label: "Facebook", aliases: ["facebook", "fb"], web: "https://www.facebook.com", androidPackage: "com.facebook.katana" },
+  { key: "twitter", label: "X / Twitter", aliases: ["twitter", "x", "x app"], web: "https://x.com", androidPackage: "com.twitter.android" },
+  { key: "snapchat", label: "Snapchat", aliases: ["snapchat", "snap"], web: "https://www.snapchat.com", androidPackage: "com.snapchat.android" },
+  { key: "calculator", label: "Calculator", aliases: ["calculator", "calc", "hisab"], web: "https://www.google.com", androidPackage: "com.google.android.calculator" },
+  { key: "clock", label: "Clock", aliases: ["clock", "alarm clock"], web: "https://www.google.com", androidPackage: "com.google.android.deskclock" },
 ];
 
 type ActionDraft = Omit<AgentAction, "status" | "detail">;

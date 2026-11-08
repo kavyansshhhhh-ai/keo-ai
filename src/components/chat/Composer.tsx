@@ -100,6 +100,11 @@ export function Composer(props: ComposerProps) {
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           aria-label="Message KEO"
+          autoComplete="on"
+          autoCorrect="on"
+          autoCapitalize="sentences"
+          spellCheck={true}
+          enterKeyHint="send"
           className="block max-h-[160px] w-full resize-none bg-transparent px-3 py-2 text-[15px] leading-relaxed text-slate-100 placeholder:text-slate-500 focus:outline-none"
         />
         <div className="flex items-center justify-between gap-2 px-1 pt-1.5">
@@ -121,11 +126,12 @@ export function Composer(props: ComposerProps) {
                 {voice.listening ? <MicOff size={17} className="relative" /> : <Mic size={17} />}
               </button>
             )}
-            {streaming ? (
+            {streaming || busy ? (
               <button
                 type="button"
                 onClick={onStop}
                 aria-label="Stop generating"
+                title="Stop generating reply"
                 className="grid h-9 w-9 place-items-center rounded-full bg-slate-100 text-slate-950 shadow-md transition hover:bg-white active:scale-95"
               >
                 <Square size={13} fill="currentColor" />

@@ -46,7 +46,17 @@ async function streamFromGeminiDirect(
   // Dynamically determine the best effective model discovered for this user's key
   const primaryModel = await getEffectiveModel(apiKey);
   const cachedModels = getCachedDiscoveredModels();
-  const modelsToTry = Array.from(new Set([primaryModel, ...cachedModels, "gemini-2.5-flash", "gemini-1.5-flash"]));
+  const modelsToTry = Array.from(
+    new Set([
+      primaryModel,
+      ...cachedModels,
+      "gemini-3.8-flash",
+      "gemini-2.5-flash",
+      "gemini-2.0-flash",
+      "gemini-1.5-flash",
+      "gemini-1.5-pro",
+    ])
+  );
 
   // Convert messages to Gemini format: user -> user, assistant -> model
   const contents = options.messages.map((m) => ({
@@ -68,9 +78,17 @@ async function streamFromGeminiDirect(
   let lastError: Error | null = null;
 
   for (const model of modelsToTry) {
+    if (options.signal.aborted) {
+      throw new Error("Generation cancelled by user.");
+    }
+
     try {
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
-      const response = await fetch(endpoint, {
+      // 1. Try streaming endpoint with both query param and header for maximum compatibility
+      const streamEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(
+        apiKey
+      )}`;
+
+      const response = await fetch(streamEndpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -81,68 +99,89 @@ async function streamFromGeminiDirect(
       });
 
       if (response.status === 404) {
-        lastError = new Error(`Model ${model} not available on this key.`);
+        lastError = new Error(`Model ${model} is not available on your Gemini key.`);
         continue;
       }
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => null);
         const errorMsg =
-          errorData?.error?.message ||
-          `Gemini API returned HTTP ${response.status}.`;
+          errorData?.error?.message || `Gemini API returned HTTP ${response.status}.`;
         if (response.status === 401 || response.status === 403) {
-          throw new Error(`Gemini API key is invalid or lacks permissions: ${errorMsg}`);
+          throw new Error(
+            `Gemini API key is invalid or unauthorized: ${errorMsg}. Please check your API key in Settings.`
+          );
         }
         if (response.status === 429) {
-          throw new Error("Gemini quota or rate limit reached. Please wait a moment.");
+          throw new Error(
+            "Gemini rate limit or quota exceeded. Please wait a few seconds and try again."
+          );
+        }
+        if (response.status >= 500) {
+          lastError = new Error(`Google Gemini service error (HTTP ${response.status}): ${errorMsg}`);
+          continue;
         }
         throw new Error(errorMsg);
       }
 
       if (!response.body) {
-        throw new Error("Gemini returned an empty response stream.");
+        // Fallback to non-streaming if stream body is missing
+        return await fetchGeminiNonStreaming(apiKey, model, requestBody, options);
       }
 
       const reader = response.body.getReader();
-      const decoder = new TextDecoder();
+      const decoder = new TextDecoder("utf-8");
       let fullText = "";
       let buffer = "";
 
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
 
-        for (const rawLine of lines) {
-          const line = rawLine.trim();
-          if (!line.startsWith("data:")) continue;
-          const payload = line.slice(5).trim();
-          if (payload === "[DONE]") return fullText;
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line.startsWith("data:")) continue;
+            const payload = line.slice(5).trim();
+            if (payload === "[DONE]") return fullText;
 
-          try {
-            const parsed = JSON.parse(payload);
-            if (parsed.error) {
-              throw new Error(parsed.error.message || "Gemini streaming error.");
-            }
-            const parts = parsed?.candidates?.[0]?.content?.parts ?? [];
-            for (const part of parts) {
-              if (typeof part.text === "string" && part.text) {
-                fullText += part.text;
-                options.onText(fullText);
+            try {
+              const parsed = JSON.parse(payload);
+              if (parsed.error) {
+                throw new Error(parsed.error.message || "Gemini streaming error.");
               }
-            }
-          } catch (jsonErr) {
-            if (jsonErr instanceof Error && jsonErr.message.includes("Gemini")) {
-              throw jsonErr;
+              const candidate = parsed?.candidates?.[0];
+              const parts = candidate?.content?.parts ?? [];
+              for (const part of parts) {
+                if (typeof part.text === "string" && part.text) {
+                  fullText += part.text;
+                  options.onText(fullText);
+                }
+              }
+            } catch (jsonErr) {
+              if (jsonErr instanceof Error && jsonErr.message.includes("Gemini")) {
+                throw jsonErr;
+              }
             }
           }
         }
+      } finally {
+        reader.releaseLock();
       }
 
-      return fullText;
+      if (fullText.trim().length > 0) {
+        return fullText;
+      }
+
+      // If stream ended without text, attempt non-streaming fallback for this model
+      const nonStreamReply = await fetchGeminiNonStreaming(apiKey, model, requestBody, options);
+      if (nonStreamReply.trim().length > 0) {
+        return nonStreamReply;
+      }
     } catch (err) {
       if (options.signal.aborted) throw err;
       if (err instanceof Error && err.name === "AbortError") throw err;
@@ -150,7 +189,43 @@ async function streamFromGeminiDirect(
     }
   }
 
-  throw lastError ?? new Error("Failed to contact Gemini service with discovered models.");
+  throw lastError ?? new Error("Failed to get response from Gemini service. Check your API key and network.");
+}
+
+async function fetchGeminiNonStreaming(
+  apiKey: string,
+  model: string,
+  requestBody: unknown,
+  options: StreamOptions
+): Promise<string> {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
+    apiKey
+  )}`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey,
+    },
+    body: JSON.stringify(requestBody),
+    signal: options.signal,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => null);
+    throw new Error(errorData?.error?.message || `Gemini API returned HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  const parts = data?.candidates?.[0]?.content?.parts ?? [];
+  let text = "";
+  for (const part of parts) {
+    if (typeof part.text === "string") text += part.text;
+  }
+  if (text) {
+    options.onText(text);
+  }
+  return text;
 }
 
 async function streamFromSupabaseBackend(
