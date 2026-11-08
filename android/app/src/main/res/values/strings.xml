@@ -4,5 +4,6 @@
     <string name="title_activity_main">KEO AI</string>
     <string name="package_name">com.keo.ai</string>
     <string name="custom_url_scheme">com.keo.ai</string>
+    <string name="accessibility_service_label">KEO AI Assistant &amp; Navigation Service</string>
     <string name="accessibility_service_description">KEO AI Accessibility Service enables your personal AI assistant to view accessible labels, buttons, and text fields in supported apps to perform requested actions on your behalf.</string>
 </resources>
