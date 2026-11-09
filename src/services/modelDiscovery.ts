@@ -57,20 +57,33 @@ export async function discoverGeminiModels(apiKey: string): Promise<string[]> {
   if (!cleanKey) return ["gemini-2.5-flash", "gemini-1.5-flash"];
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(cleanKey)}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+
   let res: Response;
   try {
-    res = await fetch(url, { method: "GET" });
-  } catch {
-    throw new Error("Could not connect to Google Gemini to discover available models. Check your internet connection.");
+    res = await fetch(url, { method: "GET", signal: controller.signal });
+  } catch (fetchErr) {
+    if (controller.signal.aborted) {
+      throw new Error("Connection to Google Gemini timed out (12s). Check your internet connection.");
+    }
+    throw new Error(
+      `Could not connect to Google Gemini (${fetchErr instanceof Error ? fetchErr.message : "Network error"}). Check your internet connection.`
+    );
+  } finally {
+    clearTimeout(timer);
   }
 
   if (!res.ok) {
     const data = await res.json().catch(() => null);
     const msg = data?.error?.message || `HTTP ${res.status}`;
-    if (res.status === 401 || res.status === 403 || res.status === 400) {
-      throw new Error(`Google rejected the API key during model discovery: ${msg}`);
+    if (res.status === 400 || res.status === 401 || res.status === 403) {
+      if (msg.includes("API_KEY_INVALID") || msg.toLowerCase().includes("not valid") || msg.toLowerCase().includes("invalid api key")) {
+        throw new Error("Invalid Gemini API key. Google reported API_KEY_INVALID. Please get a free key at https://aistudio.google.com/app/apikey.");
+      }
+      throw new Error(`Google rejected the API key: ${msg}`);
     }
-    throw new Error(`Model discovery failed: ${msg}`);
+    throw new Error(`Gemini model discovery failed: ${msg}`);
   }
 
   const data = (await res.json()) as { models?: Array<{ name?: string; supportedGenerationMethods?: string[] }> };

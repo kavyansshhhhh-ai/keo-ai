@@ -171,6 +171,31 @@ public class KeoNativePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void getClipboardText(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            try {
+                android.content.ClipboardManager clipboard = (android.content.ClipboardManager)
+                    getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+                if (clipboard != null && clipboard.hasPrimaryClip()) {
+                    android.content.ClipData clip = clipboard.getPrimaryClip();
+                    if (clip != null && clip.getItemCount() > 0) {
+                        CharSequence text = clip.getItemAt(0).coerceToText(getContext());
+                        JSObject ret = new JSObject();
+                        ret.put("text", text != null ? text.toString() : "");
+                        call.resolve(ret);
+                        return;
+                    }
+                }
+                JSObject ret = new JSObject();
+                ret.put("text", "");
+                call.resolve(ret);
+            } catch (Exception e) {
+                call.reject("Could not read clipboard: " + e.getMessage());
+            }
+        });
+    }
+
+    @PluginMethod
     public void setTorch(PluginCall call) {
         boolean on = Boolean.TRUE.equals(call.getBoolean("on", false));
         CameraManager manager = (CameraManager) getContext().getSystemService(Context.CAMERA_SERVICE);

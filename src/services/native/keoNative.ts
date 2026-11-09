@@ -26,6 +26,7 @@ interface KeoNativePlugin {
   openApp(options: { packageName: string }): Promise<{ status: "opened" | "missing" }>;
   openUrl(options: { url: string }): Promise<void>;
   openScreen(options: { screen: NativeScreen }): Promise<void>;
+  getClipboardText(): Promise<{ text: string }>;
   setTorch(options: { on: boolean }): Promise<{ supported: boolean }>;
   getBatteryStatus(): Promise<{ level: number; charging: boolean; available: boolean }>;
   isAccessibilityEnabled(): Promise<{ enabled: boolean }>;

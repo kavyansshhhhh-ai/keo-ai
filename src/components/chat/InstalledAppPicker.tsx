@@ -109,6 +109,7 @@ export function InstalledAppPicker({ open, onClose, onAppLaunched }: InstalledAp
             <Search size={15} className="absolute left-3 text-slate-400" />
             <input
               type="search"
+              inputMode="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search installed apps..."

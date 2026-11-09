@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Check, Clipboard, Cpu, ExternalLink, Eye, EyeOff, KeyRound, Loader2, RefreshCw, Trash2, X } from "lucide-react";
 import { errorMessage } from "@/lib/errors";
+import { isNativeApp, KeoNative } from "@/services/native/keoNative";
 import {
   getCachedDiscoveredModels,
   getStoredSelectedModel,
@@ -52,7 +53,7 @@ export function ApiKeyPanel() {
       const apiKey = rawKey.trim();
       if (!apiKey) return;
       if (apiKey.length < 15) {
-        setActionError("The pasted key is too short to be a valid Gemini API key.");
+        setActionError("The entered key is too short to be a valid Gemini API key (expected ~39 characters).");
         return;
       }
 
@@ -74,9 +75,12 @@ export function ApiKeyPanel() {
         const models = getCachedDiscoveredModels();
         setAvailableModels(models);
         const sel = getStoredSelectedModel();
-        setSelectedModel(sel || models[0] || "gemini-2.5-flash");
-        setSuccessMessage("Gemini API Key verified and saved successfully.");
+        const effectiveModel = sel || models[0] || "gemini-2.5-flash";
+        setSelectedModel(effectiveModel);
+        setSuccessMessage(`✓ Gemini API Key verified and saved successfully! Connected to Google Gemini (${effectiveModel}).`);
       } catch (err) {
+        // Keep draft preserved so user can inspect and fix
+        setDraft(apiKey);
         setActionError(errorMessage(err, "Could not verify this API key with Google."));
       } finally {
         setPending(null);
@@ -86,20 +90,44 @@ export function ApiKeyPanel() {
   );
 
   const handlePaste = async () => {
-    try {
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        const text = await navigator.clipboard.readText();
-        const trimmed = text ? text.trim() : "";
-        if (trimmed) {
-          setDraft(trimmed);
-          void autoVerifyAndSave(trimmed);
-          return;
+    setPending("verifying");
+    setActionError(null);
+    setSuccessMessage(null);
+
+    let pastedText = "";
+
+    // 1. First attempt native Android ClipboardManager (always allowed without WebView prompt)
+    if (isNativeApp()) {
+      try {
+        const res = await KeoNative.getClipboardText();
+        if (res && res.text) {
+          pastedText = res.text.trim();
         }
+      } catch (nativeErr) {
+        console.warn("[KEO] Native clipboard read error:", nativeErr);
       }
-      setActionError("Clipboard is empty or access was denied. Please paste directly into the field.");
-    } catch {
-      setActionError("Could not read clipboard. Please paste your key directly into the input field.");
     }
+
+    // 2. Fallback to web navigator.clipboard API
+    if (!pastedText && typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.readText) {
+      try {
+        const webText = await navigator.clipboard.readText();
+        if (webText) {
+          pastedText = webText.trim();
+        }
+      } catch {
+        // Browser clipboard permission denied or not supported
+      }
+    }
+
+    if (pastedText) {
+      setDraft(pastedText);
+      void autoVerifyAndSave(pastedText);
+      return;
+    }
+
+    setPending(null);
+    setActionError("Clipboard is empty or access was denied. Please copy your key from Google AI Studio, then tap Paste.");
   };
 
   const handleInputPaste = (event: React.ClipboardEvent<HTMLInputElement>) => {

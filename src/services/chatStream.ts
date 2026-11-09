@@ -87,34 +87,41 @@ async function streamFromGeminiDirect(
     ])
   );
 
-  // Convert messages to Gemini format: user -> user, assistant -> model
-  const contents = options.messages.map((m) => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: m.content }],
-  }));
+  // Normalize turns: Google Gemini STRICTLY requires alternating user -> model -> user turns.
+  // Merge consecutive same-role turns to avoid HTTP 400 "Please ensure that multiturn talk alternates between user and model".
+  const normalizedContents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> = [];
+  for (const m of options.messages) {
+    const text = m.content.trim();
+    if (!text) continue;
+    const role = m.role === "assistant" ? "model" : "user";
+    if (normalizedContents.length === 0) {
+      if (role !== "user") continue; // Never start with model turn
+      normalizedContents.push({ role: "user", parts: [{ text }] });
+    } else {
+      const last = normalizedContents[normalizedContents.length - 1];
+      if (last.role === role) {
+        last.parts.push({ text });
+      } else {
+        normalizedContents.push({ role, parts: [{ text }] });
+      }
+    }
+  }
+
+  if (normalizedContents.length === 0) {
+    normalizedContents.push({ role: "user", parts: [{ text: "Hello" }] });
+  } else if (normalizedContents[normalizedContents.length - 1].role !== "user") {
+    normalizedContents.push({ role: "user", parts: [{ text: "Please continue" }] });
+  }
 
   const buildBody = (includeSystemInstruction: boolean) => {
-    if (includeSystemInstruction) {
-      return {
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        contents,
-        generationConfig: { temperature: 0.7, maxOutputTokens: 4096 },
-      };
-    }
-    // Fallback if systemInstruction is not supported: prepend system prompt to first user message
-    const fallbackContents = contents.map((c, idx) => {
-      if (idx === 0 && c.role === "user") {
-        return {
-          role: "user",
-          parts: [{ text: `[System Instructions: ${systemPrompt}]\n\n${c.parts[0]?.text ?? ""}` }],
-        };
-      }
-      return c;
-    });
-    return {
-      contents: fallbackContents,
-      generationConfig: { temperature: 0.7, maxOutputTokens: 4096 },
+    const body: Record<string, unknown> = {
+      contents: normalizedContents,
+      generationConfig: { maxOutputTokens: 4096 }, // Do not include temperature to prevent 400 on newer models
     };
+    if (includeSystemInstruction) {
+      body.systemInstruction = { parts: [{ text: systemPrompt }] };
+    }
+    return body;
   };
 
   let lastError: Error | null = null;
@@ -129,7 +136,6 @@ async function streamFromGeminiDirect(
       const requestBody = buildBody(withSystem);
 
       try {
-        // Attempt 1: Fast direct non-streaming fallback if stream fails or hangs
         const streamEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(
           apiKey
         )}`;
@@ -142,11 +148,10 @@ async function streamFromGeminiDirect(
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                "x-goog-api-key": apiKey,
               },
               body: JSON.stringify(requestBody),
             },
-            10000, // 10s connection timeout
+            12000, // 12s connection timeout
             options.signal
           );
         } catch (fetchErr) {
@@ -201,9 +206,19 @@ async function streamFromGeminiDirect(
         let fullText = "";
         let buffer = "";
 
+        const readWithTimeout = (timeoutMs: number) => {
+          return Promise.race([
+            reader.read(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error("Stream read timeout")), timeoutMs)
+            ),
+          ]);
+        };
+
         try {
           for (;;) {
-            const { value, done } = await reader.read();
+            if (options.signal.aborted) throw new Error("Generation cancelled by user.");
+            const { value, done } = await readWithTimeout(12000);
             if (done) break;
 
             buffer += decoder.decode(value, { stream: true });
@@ -214,7 +229,7 @@ async function streamFromGeminiDirect(
               const line = rawLine.trim();
               if (!line.startsWith("data:")) continue;
               const payload = line.slice(5).trim();
-              if (payload === "[DONE]") return fullText;
+              if (!payload || payload === "[DONE]") continue;
 
               try {
                 const parsed = JSON.parse(payload);
@@ -224,7 +239,7 @@ async function streamFromGeminiDirect(
                 const candidate = parsed?.candidates?.[0];
                 const parts = candidate?.content?.parts ?? [];
                 for (const part of parts) {
-                  if (typeof part.text === "string" && part.text) {
+                  if (typeof part.text === "string" && part.text && !part.thought) {
                     fullText += part.text;
                     options.onText(fullText);
                   }
@@ -235,6 +250,11 @@ async function streamFromGeminiDirect(
                 }
               }
             }
+          }
+        } catch {
+          // If stream read timed out or failed mid-stream, fallback to non-streaming if no text arrived
+          if (!fullText.trim()) {
+            return await fetchGeminiNonStreaming(apiKey, model, requestBody, options);
           }
         } finally {
           reader.releaseLock();
@@ -257,7 +277,7 @@ async function streamFromGeminiDirect(
 
   throw (
     lastError ??
-    new Error("Unable to get reply from Google Gemini. Please check your API key in Settings and try again.")
+    new Error("Unable to get reply from Google Gemini. Please check your API key in Settings -> Gemini API Key and try again.")
   );
 }
 
@@ -277,24 +297,29 @@ async function fetchGeminiNonStreaming(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
       },
       body: JSON.stringify(requestBody),
     },
-    15000, // 15s timeout
+    20000, // 20s timeout
     options.signal
   );
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => null);
-    throw new Error(errorData?.error?.message || `Gemini API returned HTTP ${response.status}`);
+    const msg = errorData?.error?.message || `Gemini API returned HTTP ${response.status}`;
+    if (response.status === 400 || response.status === 401 || response.status === 403) {
+      if (msg.includes("API_KEY_INVALID") || msg.toLowerCase().includes("not valid")) {
+        throw new Error("Gemini API key is invalid. Please verify your key in Settings -> Gemini API Key.");
+      }
+    }
+    throw new Error(msg);
   }
 
   const data = await response.json();
   const parts = data?.candidates?.[0]?.content?.parts ?? [];
   let text = "";
   for (const part of parts) {
-    if (typeof part.text === "string") text += part.text;
+    if (typeof part.text === "string" && !part.thought) text += part.text;
   }
   if (text) {
     options.onText(text);
@@ -376,12 +401,12 @@ export async function streamChatReply(options: StreamOptions): Promise<string> {
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") throw err;
       throw new Error(
-        `AI service unavailable: ${err instanceof Error ? err.message : String(err)}. Please add your Gemini API key in Settings.`
+        `AI service unavailable: ${err instanceof Error ? err.message : String(err)}. Please add your Gemini API key in Settings -> Gemini API Key.`
       );
     }
   }
 
-  throw new Error("Please add your Gemini API key in Settings to start chatting.");
+  throw new Error("Please add your Gemini API key in Settings -> Gemini API Key to start chatting.");
 }
 
 export async function checkAIProvider(): Promise<{ ok: boolean; message: string }> {

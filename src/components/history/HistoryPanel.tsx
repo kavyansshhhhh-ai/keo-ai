@@ -86,6 +86,7 @@ export function HistoryPanel(props: HistoryPanelProps) {
             <Search size={15} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted" />
             <input
               type="search"
+              inputMode="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search chats"
@@ -119,6 +120,7 @@ export function HistoryPanel(props: HistoryPanelProps) {
                       <input
                         autoFocus
                         type="text"
+                        inputMode="text"
                         value={editTitle}
                         onChange={(event) => setEditTitle(event.target.value)}
                         onKeyDown={(event) => handleRenameKey(event, conversation.id)}

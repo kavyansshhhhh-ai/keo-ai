@@ -95,18 +95,21 @@ export function Composer(props: ComposerProps) {
       <div className="glass-strong rounded-3xl p-2.5 shadow-2xl shadow-black/60 transition focus-within:border-cyan-400/50 focus-within:ring-1 focus-within:ring-cyan-400/20">
         <textarea
           ref={textareaRef}
+          id="chat-message-input"
+          name="message"
           rows={1}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           aria-label="Message KEO"
+          inputMode="text"
           autoComplete="on"
           autoCorrect="on"
           autoCapitalize="sentences"
           spellCheck={true}
           enterKeyHint="send"
-          className="block max-h-[160px] w-full resize-none bg-transparent px-3 py-2 text-[15px] leading-relaxed text-slate-100 placeholder:text-slate-500 focus:outline-none"
+          className="block max-h-[160px] w-full resize-none bg-transparent px-3 py-2 text-[15px] leading-relaxed text-slate-100 placeholder:text-slate-500 focus:outline-none select-text"
         />
         <div className="flex items-center justify-between gap-2 px-1 pt-1.5">
           <div className="flex items-center gap-1.5">

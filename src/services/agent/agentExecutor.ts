@@ -118,7 +118,9 @@ export async function planAgentTurn(text: string): Promise<TurnPlan> {
 
   // If deterministic parser didn't match, check dynamic installed apps
   if (parsed.type === "none") {
-    const isLaunchIntent = /\b(open|kholo|khol|kholiye|launch|start|chalu|chalao|chalo)\b/i.test(text);
+    const isLaunchIntent =
+      /\b(open|kholo|khol|kholiye|launch|start|chalu|chalao|chalo|shuru)\b/i.test(text) ||
+      text.trim().split(/\s+/).length <= 2;
     if (isLaunchIntent) {
       const match = await matchInstalledApps(text);
       if (match.exact) {

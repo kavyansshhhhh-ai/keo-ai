@@ -59,6 +59,7 @@ export function ProfileDialog({ open, onClose, displayName, conversationCount, o
           <span className="text-muted">Your name</span>
           <input
             type="text"
+            inputMode="text"
             value={name}
             onChange={(event) => setName(event.target.value)}
             maxLength={40}

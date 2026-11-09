@@ -96,9 +96,17 @@ export async function getInstalledAppList(forceRefresh = false): Promise<Install
 function cleanAppName(text: string): string {
   return text
     .toLowerCase()
-    .replace(/\b(open|kholo|khol|kholiye|launch|start|chalu|chalao|chalo|app|application|wala|wali|please|pls)\b/gi, "")
-    .replace(/[^\p{L}\p{N}\s]/gu, "")
+    .replace(
+      /\b(open|kholo|khol|kholiye|launch|start|chalu|chalao|chalo|shuru|shurukaro|karo|kardo|kar|do|app|application|wala|wali|wale|please|pls|mera|meri|mere|bhai|keo|hey|hi)\b/gi,
+      " "
+    )
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
     .trim();
+}
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export async function matchInstalledApps(queryText: string): Promise<{
@@ -110,37 +118,82 @@ export async function matchInstalledApps(queryText: string): Promise<{
   if (!target) return { exact: null, candidates: [], cleanedTarget: "" };
 
   const apps = await getInstalledAppList();
+  if (!apps || apps.length === 0) {
+    return { exact: null, candidates: [], cleanedTarget: target };
+  }
 
-  // 1. Check alias map first
-  for (const [key, aliases] of Object.entries(ALIAS_MAP)) {
-    if (aliases.some((alias) => target === alias || target.includes(alias))) {
-      const match = apps.find(
-        (a) =>
-          a.appName.toLowerCase().includes(key) ||
-          a.packageName.toLowerCase().includes(key)
-      );
-      if (match) return { exact: match, candidates: [match], cleanedTarget: target };
+  // Score each app
+  const scored: Array<{ app: InstalledAppInfo; score: number }> = [];
+
+  for (const app of apps) {
+    const nameLower = app.appName.toLowerCase().trim();
+    const pkgLower = app.packageName.toLowerCase().trim();
+    let score = 0;
+
+    // 1. Exact title match
+    if (nameLower === target) {
+      score = 100;
+    }
+    // 2. Exact word boundary match in title (e.g. target "youtube" in "YouTube")
+    else if (new RegExp(`\\b${escapeRegex(target)}\\b`, "i").test(nameLower)) {
+      // If the app name has additional words, score slightly lower than 100 but higher than aliases
+      const wordCountDiff = Math.abs(nameLower.split(/\s+/).length - target.split(/\s+/).length);
+      score = wordCountDiff === 0 ? 100 : Math.max(90 - wordCountDiff * 5, 80);
+    }
+    // 3. Exact alias match
+    else {
+      for (const [key, aliases] of Object.entries(ALIAS_MAP)) {
+        if (aliases.includes(target)) {
+          if (nameLower.includes(key) || pkgLower.includes(key)) {
+            score = 85;
+            break;
+          }
+        }
+      }
+    }
+
+    // 4. Package name suffix or contains target
+    if (score === 0) {
+      if (pkgLower.endsWith(`.${target}`)) {
+        score = 75;
+      } else if (nameLower.startsWith(target)) {
+        score = 65;
+      } else if (nameLower.includes(target)) {
+        score = 50;
+      } else if (pkgLower.includes(target)) {
+        score = 35;
+      }
+    }
+
+    if (score > 0) {
+      scored.push({ app, score });
     }
   }
 
-  // 2. Exact name match (case-insensitive)
-  const exact = apps.find(
-    (a) =>
-      a.appName.toLowerCase() === target ||
-      a.packageName.toLowerCase().endsWith(`.${target}`)
-  );
-  if (exact) return { exact, candidates: [exact], cleanedTarget: target };
+  // Sort descending by score
+  scored.sort((a, b) => b.score - a.score);
 
-  // 3. Substring candidates
-  const candidates = apps.filter(
-    (a) =>
-      a.appName.toLowerCase().includes(target) ||
-      a.packageName.toLowerCase().includes(target)
-  );
-
-  if (candidates.length === 1) {
-    return { exact: candidates[0], candidates, cleanedTarget: target };
+  if (scored.length === 0) {
+    return { exact: null, candidates: [], cleanedTarget: target };
   }
 
-  return { exact: null, candidates, cleanedTarget: target };
+  const top = scored[0];
+  const second = scored[1];
+
+  // If top candidate has high confidence or beats second candidate decisively
+  if (top.score >= 80 || !second || top.score > second.score + 15) {
+    return {
+      exact: top.app,
+      candidates: [top.app],
+      cleanedTarget: target,
+    };
+  }
+
+  // Multiple ambiguous candidates with similar scores
+  const closeCandidates = scored.filter((s) => s.score >= top.score - 10).map((s) => s.app);
+  return {
+    exact: null,
+    candidates: closeCandidates,
+    cleanedTarget: target,
+  };
 }

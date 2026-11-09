@@ -6,7 +6,8 @@ import { ApiKeyPanel } from "@/components/settings/ApiKeyPanel";
 import { checkAIProvider } from "@/services/chatStream";
 import { isSpeechOutputSupported } from "@/services/voice";
 import { APP_VERSION } from "@/lib/defaults";
-import { KeoNative } from "@/services/native/keoNative";
+import { App as CapApp } from "@capacitor/app";
+import { isNativeApp, KeoNative } from "@/services/native/keoNative";
 import type { AppSettings, Language, Theme } from "@/types/chat";
 
 interface SettingsScreenProps {
@@ -125,7 +126,20 @@ export function SettingsScreen({ settings, conversationCount, onUpdate, onClearA
     void checkPerms();
     const handleFocus = () => void checkPerms();
     window.addEventListener("focus", handleFocus);
-    return () => window.removeEventListener("focus", handleFocus);
+
+    let removeAppState: (() => void) | undefined;
+    if (isNativeApp()) {
+      CapApp.addListener("appStateChange", ({ isActive }) => {
+        if (isActive) void checkPerms();
+      }).then((handle) => {
+        removeAppState = () => void handle.remove();
+      }).catch(() => {});
+    }
+
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      if (removeAppState) removeAppState();
+    };
   }, [checkPerms]);
 
   const testProvider = async () => {

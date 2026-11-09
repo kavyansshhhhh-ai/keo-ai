@@ -65,7 +65,12 @@ export function MessageBubble(props: MessageBubbleProps) {
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 rows={3}
-                className="field resize-none"
+                inputMode="text"
+                autoComplete="on"
+                autoCorrect="on"
+                autoCapitalize="sentences"
+                spellCheck={true}
+                className="field resize-none select-text"
                 aria-label="Edit message"
               />
               <div className="mt-2 flex justify-end gap-2">
