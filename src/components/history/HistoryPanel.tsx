@@ -90,6 +90,10 @@ export function HistoryPanel(props: HistoryPanelProps) {
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search chats"
               aria-label="Search chats"
+              autoComplete="off"
+              autoCorrect="on"
+              autoCapitalize="sentences"
+              spellCheck={true}
               className="field !pl-9"
             />
           </label>
@@ -114,11 +118,16 @@ export function HistoryPanel(props: HistoryPanelProps) {
                     <div className="px-2 py-1.5">
                       <input
                         autoFocus
+                        type="text"
                         value={editTitle}
                         onChange={(event) => setEditTitle(event.target.value)}
                         onKeyDown={(event) => handleRenameKey(event, conversation.id)}
                         maxLength={120}
                         aria-label="Conversation title"
+                        autoComplete="off"
+                        autoCorrect="on"
+                        autoCapitalize="sentences"
+                        spellCheck={true}
                         className="field !py-2"
                       />
                       {renameError && <p className="mt-1 text-xs text-error-300">{renameError}</p>}

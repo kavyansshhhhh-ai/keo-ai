@@ -58,9 +58,14 @@ export function ProfileDialog({ open, onClose, displayName, conversationCount, o
         <label className="flex flex-col gap-2 text-sm">
           <span className="text-muted">Your name</span>
           <input
+            type="text"
             value={name}
             onChange={(event) => setName(event.target.value)}
             maxLength={40}
+            autoComplete="name"
+            autoCorrect="on"
+            autoCapitalize="words"
+            spellCheck={true}
             placeholder="How should KEO greet you?"
             className="field"
           />

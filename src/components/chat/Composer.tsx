@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, type KeyboardEvent } from "react";
-import { Mic, MicOff, Send, Square } from "lucide-react";
+import { AppWindow, Mic, MicOff, Send, Square } from "lucide-react";
 import { ModeToggle } from "@/components/chat/ModeToggle";
 import type { MicGate } from "@/hooks/useVoiceInput";
 import type { ChatMode } from "@/types/chat";
@@ -26,10 +26,11 @@ interface ComposerProps {
   mode: ChatMode;
   onChangeMode: (mode: ChatMode) => void;
   voice: VoiceControls;
+  onOpenApps?: () => void;
 }
 
 export function Composer(props: ComposerProps) {
-  const { value, onChange, onSubmit, onStop, streaming, busy, mode, onChangeMode, voice } = props;
+  const { value, onChange, onSubmit, onStop, streaming, busy, mode, onChangeMode, voice, onOpenApps } = props;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useLayoutEffect(() => {
@@ -108,7 +109,20 @@ export function Composer(props: ComposerProps) {
           className="block max-h-[160px] w-full resize-none bg-transparent px-3 py-2 text-[15px] leading-relaxed text-slate-100 placeholder:text-slate-500 focus:outline-none"
         />
         <div className="flex items-center justify-between gap-2 px-1 pt-1.5">
-          <ModeToggle mode={mode} onChange={onChangeMode} />
+          <div className="flex items-center gap-1.5">
+            <ModeToggle mode={mode} onChange={onChangeMode} />
+            {onOpenApps && (
+              <button
+                type="button"
+                onClick={onOpenApps}
+                aria-label="Open Installed Apps"
+                title="Browse Installed Android Apps"
+                className="grid h-8 w-8 place-items-center rounded-xl text-slate-400 transition hover:bg-white/10 hover:text-cyan-400 active:scale-95"
+              >
+                <AppWindow size={16} />
+              </button>
+            )}
+          </div>
           <div className="flex items-center gap-1.5">
             {voice.supported && (
               <button

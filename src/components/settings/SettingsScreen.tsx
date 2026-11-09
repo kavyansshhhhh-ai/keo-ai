@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ArrowLeft, Bot, Trash2, Volume2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/common/Modal";
+import { InstalledAppPicker } from "@/components/chat/InstalledAppPicker";
 import { ApiKeyPanel } from "@/components/settings/ApiKeyPanel";
 import { checkAIProvider } from "@/services/chatStream";
 import { isSpeechOutputSupported } from "@/services/voice";
@@ -98,9 +99,14 @@ export function SettingsScreen({ settings, conversationCount, onUpdate, onClearA
   const [confirmClear, setConfirmClear] = useState(false);
   const [providerStatus, setProviderStatus] = useState<{ ok: boolean; message: string } | null>(null);
   const [checking, setChecking] = useState(false);
-  const [permStatus, setPermStatus] = useState<{ accessibility: boolean; notification: boolean; camera: boolean } | null>(null);
+  const [showAppPicker, setShowAppPicker] = useState(false);
+  const [permStatus, setPermStatus] = useState<{
+    accessibility: boolean;
+    notification: boolean;
+    camera: boolean;
+  } | null>(null);
 
-  const checkPerms = async () => {
+  const checkPerms = useCallback(async () => {
     try {
       const acc = await KeoNative.isAccessibilityEnabled();
       const notif = await KeoNative.checkPermission({ permission: "notifications" });
@@ -113,7 +119,14 @@ export function SettingsScreen({ settings, conversationCount, onUpdate, onClearA
     } catch {
       setPermStatus(null);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    void checkPerms();
+    const handleFocus = () => void checkPerms();
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
+  }, [checkPerms]);
 
   const testProvider = async () => {
     setChecking(true);
@@ -146,34 +159,80 @@ export function SettingsScreen({ settings, conversationCount, onUpdate, onClearA
         </Row>
       </Section>
 
-      <Section title="Android Personal Assistant Setup" description="Configure permissions and accessibility for voice control, device actions, and native UI automation.">
-        <Row label="Permission Wizard" hint="Run the step-by-step assistant permission guide.">
+      <Section
+        title="Android Permissions &amp; Assistant Setup"
+        description="All permissions are optional. Enable only the capabilities you wish to use with KEO."
+      >
+        <Row label="Permission Setup Wizard" hint="Rerun the step-by-step guided permission setup.">
           <button
             type="button"
-            onClick={() => onOpenWizard ? onOpenWizard() : void checkPerms()}
-            className="btn-accent text-xs font-medium !py-2 !px-4"
+            onClick={() => (onOpenWizard ? onOpenWizard() : void checkPerms())}
+            className="btn-primary text-xs font-medium !py-2 !px-4"
           >
             Launch Setup Wizard
           </button>
         </Row>
-        <Row label="Accessibility Automation Service" hint="Required for KEO Agent to open apps and perform UI actions.">
-          <div className="flex gap-2">
+
+        <Row
+          label="Notifications"
+          hint={permStatus?.notification ? "Status: Granted (KEO can send task alerts)" : "Status: Disabled (Optional)"}
+        >
+          <button
+            type="button"
+            onClick={() => void KeoNative.openScreen({ screen: "notifications" })}
+            className="btn-ghost text-xs !py-1.5 !px-3"
+          >
+            {permStatus?.notification ? "Configured" : "Open Settings"}
+          </button>
+        </Row>
+
+        <Row
+          label="Camera &amp; Flashlight"
+          hint={permStatus?.camera ? "Status: Allowed (Flashlight control active)" : "Status: Disabled (Optional)"}
+        >
+          <button
+            type="button"
+            onClick={() => void KeoNative.openScreen({ screen: "appDetails" })}
+            className="btn-ghost text-xs !py-1.5 !px-3"
+          >
+            {permStatus?.camera ? "Allowed" : "App Permissions"}
+          </button>
+        </Row>
+
+        <Row
+          label="Accessibility Automation Service"
+          hint="Allows KEO Agent to open installed apps, perform navigation, and automate UI actions on your behalf."
+        >
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() => void KeoNative.openScreen({ screen: "accessibility" })}
               className="btn-ghost text-xs !py-1.5 !px-3"
             >
-              {permStatus?.accessibility ? "Active" : "Open Settings"}
+              {permStatus?.accessibility ? "Service Active" : "Open Accessibility"}
             </button>
             <button
               type="button"
               onClick={() => void KeoNative.openScreen({ screen: "appDetails" })}
-              className="btn-ghost text-xs !py-1.5 !px-3 text-amber-300 hover:text-amber-200"
-              title="If Android shows Restricted Setting, tap here, then tap 3-dots top right -> Allow restricted settings"
+              className="btn-ghost text-xs !py-1.5 !px-3 text-amber-300 hover:text-amber-200 border border-white/10"
+              title="If Android says Restricted setting, tap here -> tap 3 dots (⋮) top right -> Allow restricted settings"
             >
-              App Info (Restricted Fix)
+              Fix Restricted Setting
             </button>
           </div>
+        </Row>
+
+        <Row
+          label="Installed Apps Discovery"
+          hint="View all launchable apps discovered dynamically on your phone via Android PackageManager."
+        >
+          <button
+            type="button"
+            onClick={() => setShowAppPicker(true)}
+            className="btn-ghost text-xs text-cyan-300 border border-cyan-400/30 !py-1.5 !px-3"
+          >
+            Browse Installed Apps
+          </button>
         </Row>
       </Section>
 
@@ -260,6 +319,11 @@ export function SettingsScreen({ settings, conversationCount, onUpdate, onClearA
         confirmLabel="Clear everything"
         onClose={() => setConfirmClear(false)}
         onConfirm={onClearAll}
+      />
+
+      <InstalledAppPicker
+        open={showAppPicker}
+        onClose={() => setShowAppPicker(false)}
       />
     </div>
   );

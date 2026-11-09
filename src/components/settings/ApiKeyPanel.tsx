@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Check, Clipboard, Cpu, ExternalLink, Eye, EyeOff, KeyRound, Loader2, RefreshCw, Trash2, X } from "lucide-react";
 import { errorMessage } from "@/lib/errors";
 import {
-  discoverGeminiModels,
   getCachedDiscoveredModels,
   getStoredSelectedModel,
   setStoredSelectedModel,
@@ -48,20 +47,79 @@ export function ApiKeyPanel() {
     void loadStatus();
   }, [loadStatus]);
 
+  const autoVerifyAndSave = useCallback(
+    async (rawKey: string) => {
+      const apiKey = rawKey.trim();
+      if (!apiKey) return;
+      if (apiKey.length < 15) {
+        setActionError("The pasted key is too short to be a valid Gemini API key.");
+        return;
+      }
+
+      setPending("saving");
+      setActionError(null);
+      setSuccessMessage(null);
+
+      if (!navigator.onLine) {
+        setPending(null);
+        setActionError("Network unavailable. Please check your internet connection and tap Retry.");
+        return;
+      }
+
+      try {
+        const nextStatus = await saveProviderKey(apiKey);
+        setStatus(nextStatus);
+        setDraft("");
+        setShowKey(false);
+        const models = getCachedDiscoveredModels();
+        setAvailableModels(models);
+        const sel = getStoredSelectedModel();
+        setSelectedModel(sel || models[0] || "gemini-2.5-flash");
+        setSuccessMessage("Gemini API Key verified and saved successfully.");
+      } catch (err) {
+        setActionError(errorMessage(err, "Could not verify this API key with Google."));
+      } finally {
+        setPending(null);
+      }
+    },
+    []
+  );
+
   const handlePaste = async () => {
     try {
       if (navigator.clipboard && navigator.clipboard.readText) {
         const text = await navigator.clipboard.readText();
-        if (text && text.trim()) {
-          setDraft(text.trim());
-          setActionError(null);
-          setSuccessMessage("Key pasted from clipboard. Tap 'Verify Key' or 'Save Key' to apply.");
+        const trimmed = text ? text.trim() : "";
+        if (trimmed) {
+          setDraft(trimmed);
+          void autoVerifyAndSave(trimmed);
           return;
         }
       }
-      setActionError("Clipboard access empty or not available. Please paste manually into the text box.");
+      setActionError("Clipboard is empty or access was denied. Please paste directly into the field.");
     } catch {
       setActionError("Could not read clipboard. Please paste your key directly into the input field.");
+    }
+  };
+
+  const handleInputPaste = (event: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = event.clipboardData.getData("text");
+    if (text) {
+      const trimmed = text.trim();
+      setDraft(trimmed);
+      void autoVerifyAndSave(trimmed);
+    }
+  };
+
+  const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const val = event.target.value;
+    setDraft(val);
+    if (actionError) setActionError(null);
+
+    // Auto-detect if user pasted via Gboard suggestion or long-press without firing standard paste
+    const trimmed = val.trim();
+    if (trimmed.length >= 35 && (trimmed.startsWith("AIza") || trimmed.includes("_"))) {
+      void autoVerifyAndSave(trimmed);
     }
   };
 
@@ -73,49 +131,19 @@ export function ApiKeyPanel() {
   };
 
   const handleVerify = async () => {
-    const apiKey = draft.trim() || (status?.configured ? "USE_STORED" : "");
+    const apiKey = draft.trim();
     if (!apiKey) {
       setActionError("Please paste or enter an API key to verify.");
       return;
     }
-    setPending("verifying");
-    setActionError(null);
-    setSuccessMessage(null);
-    try {
-      const models = await discoverGeminiModels(draft.trim() || status?.masked || "");
-      setVerifiedModels(models);
-      setSuccessMessage(
-        `Key verified! Discovered ${models.length} supported Gemini models (${models[0]} selected as primary).`
-      );
-    } catch (err) {
-      setActionError(errorMessage(err, "Verification failed. Check your API key."));
-    } finally {
-      setPending(null);
-    }
+    void autoVerifyAndSave(apiKey);
   };
 
   const handleSave = async (event?: FormEvent<HTMLFormElement>) => {
     if (event) event.preventDefault();
     const apiKey = draft.trim();
     if (!apiKey || pending) return;
-    setPending("saving");
-    setActionError(null);
-    setSuccessMessage(null);
-    try {
-      const nextStatus = await saveProviderKey(apiKey);
-      setStatus(nextStatus);
-      setDraft("");
-      setShowKey(false);
-      const models = getCachedDiscoveredModels();
-      setAvailableModels(models);
-      const sel = getStoredSelectedModel();
-      setSelectedModel(sel || models[0] || "gemini-2.5-flash");
-      setSuccessMessage("Gemini API key verified with Google, models discovered, and saved securely on your device.");
-    } catch (err) {
-      setActionError(errorMessage(err, "Could not save the key."));
-    } finally {
-      setPending(null);
-    }
+    void autoVerifyAndSave(apiKey);
   };
 
   const handleRemove = async () => {
@@ -252,10 +280,8 @@ export function ApiKeyPanel() {
             autoComplete="off"
             spellCheck={false}
             value={draft}
-            onChange={(event) => {
-              setDraft(event.target.value);
-              if (actionError) setActionError(null);
-            }}
+            onPaste={handleInputPaste}
+            onChange={handleInputChange}
             placeholder={configured ? "Paste a new key to update..." : "Paste your key (AIzaSy...)"}
             className="field min-w-0 flex-1 pr-24 font-mono text-sm"
           />
@@ -288,11 +314,12 @@ export function ApiKeyPanel() {
           <button
             type="button"
             onClick={() => void handlePaste()}
-            className="btn-ghost flex items-center gap-1.5 !px-3 !py-2 text-xs text-slate-200 border border-white/10 hover:bg-white/10"
-            title="Paste key from clipboard without saving yet"
+            disabled={pending !== null}
+            className="btn-primary flex items-center gap-1.5 !px-3.5 !py-2 text-xs font-semibold shadow-md shadow-cyan-400/20"
+            title="Paste key from clipboard and auto-verify and save"
           >
-            <Clipboard size={14} className="text-cyan-400" />
-            <span>Paste from Clipboard</span>
+            <Clipboard size={14} />
+            <span>Paste & Auto-Save</span>
           </button>
 
           <div className="flex items-center gap-2">
@@ -301,40 +328,17 @@ export function ApiKeyPanel() {
               disabled={!draft.trim() || pending !== null}
               onClick={() => void handleVerify()}
               className="btn-ghost flex items-center gap-1.5 !px-3.5 !py-2 text-xs text-cyan-300 border border-cyan-400/30 hover:bg-cyan-400/10 disabled:opacity-40"
-              title="Test key & discover models before saving"
-            >
-              {pending === "verifying" ? (
-                <>
-                  <Loader2 size={13} className="animate-spin" />
-                  <span>Verifying...</span>
-                </>
-              ) : (
-                <>
-                  <Cpu size={13} />
-                  <span>Verify Key</span>
-                </>
-              )}
-            </button>
-
-            <button
-              type="submit"
-              disabled={!draft.trim() || pending !== null}
-              className="btn-primary shrink-0 !px-4 !py-2 text-xs"
+              title="Verify and save entered key"
             >
               {pending === "saving" ? (
                 <>
-                  <Loader2 size={14} className="animate-spin" />
-                  <span>Saving...</span>
-                </>
-              ) : configured ? (
-                <>
-                  <Check size={14} />
-                  <span>Update Key</span>
+                  <Loader2 size={13} className="animate-spin" />
+                  <span>Verifying & Saving...</span>
                 </>
               ) : (
                 <>
-                  <Check size={14} />
-                  <span>Save Key</span>
+                  <Check size={13} />
+                  <span>Verify & Save</span>
                 </>
               )}
             </button>
@@ -357,9 +361,20 @@ export function ApiKeyPanel() {
       )}
 
       {actionError && (
-        <div role="alert" className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs leading-relaxed text-rose-300">
-          <span className="font-semibold">Error: </span>
-          {actionError}
+        <div role="alert" className="flex flex-col gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs leading-relaxed text-rose-300">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold">Verification Notice:</span>
+            {draft.trim() && (
+              <button
+                type="button"
+                onClick={() => void autoVerifyAndSave(draft.trim())}
+                className="btn-primary !px-2.5 !py-1 text-[11px]"
+              >
+                Retry
+              </button>
+            )}
+          </div>
+          <p>{actionError}</p>
         </div>
       )}
 

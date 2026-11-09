@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Composer } from "@/components/chat/Composer";
+import { InstalledAppPicker } from "@/components/chat/InstalledAppPicker";
 import { MessageList } from "@/components/chat/MessageList";
 import { Welcome } from "@/components/chat/Welcome";
 import type { ChatThreadState } from "@/hooks/useChatThread";
@@ -31,6 +32,7 @@ export function ChatView(props: ChatViewProps) {
     onOpenSettings,
   } = props;
   const [draft, setDraft] = useState("");
+  const [showApps, setShowApps] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(() => Boolean(getLocalApiKey()));
 
   useEffect(() => {
@@ -82,6 +84,14 @@ export function ChatView(props: ChatViewProps) {
         mode={mode}
         onChangeMode={onChangeMode}
         voice={voice}
+        onOpenApps={() => setShowApps(true)}
+      />
+      <InstalledAppPicker
+        open={showApps}
+        onClose={() => setShowApps(false)}
+        onAppLaunched={(app) => {
+          void thread.send(`Open ${app.appName}`);
+        }}
       />
     </div>
   );

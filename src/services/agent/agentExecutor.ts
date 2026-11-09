@@ -2,6 +2,7 @@ import { errorMessage } from "@/lib/errors";
 import { readBattery, setFlashlight, shareText } from "@/services/agent/deviceTools";
 import { parseCommand } from "@/services/agent/parseCommand";
 import { routeCommandFast } from "@/services/agent/fastCommandRouter";
+import { matchInstalledApps } from "@/services/agent/installedAppsService";
 import { KeoNative, isNativeApp, type NativeScreen } from "@/services/native/keoNative";
 import type { ActionOutcome, AgentAction } from "@/types/chat";
 
@@ -62,6 +63,13 @@ async function openInNativeApp(action: AgentAction): Promise<ActionOutcome> {
       return { status: "done", detail: "Opened on your phone." };
     }
     if (action.kind === "prepare_whatsapp" || action.kind === "send_whatsapp") {
+      const acc = await KeoNative.isAccessibilityEnabled();
+      if (!acc.enabled) {
+        return {
+          status: "failed",
+          detail: "KEO AI Accessibility Service is currently disabled. Please enable it in Settings -> Android Personal Assistant Setup.",
+        };
+      }
       const result = await KeoNative.performAccessibilityAction({
         action: "sendWhatsAppMessage",
         query: action.phone ?? action.target ?? "",
@@ -106,7 +114,44 @@ export async function executeAction(action: AgentAction): Promise<ActionOutcome>
 
 export async function planAgentTurn(text: string): Promise<TurnPlan> {
   const fastResult = routeCommandFast(text);
-  const parsed = fastResult.handledLocally ? fastResult.parsed : parseCommand(text);
+  let parsed = fastResult.handledLocally ? fastResult.parsed : parseCommand(text);
+
+  // If deterministic parser didn't match, check dynamic installed apps
+  if (parsed.type === "none") {
+    const isLaunchIntent = /\b(open|kholo|khol|kholiye|launch|start|chalu|chalao|chalo)\b/i.test(text);
+    if (isLaunchIntent) {
+      const match = await matchInstalledApps(text);
+      if (match.exact) {
+        parsed = {
+          type: "action",
+          action: {
+            kind: "open_app",
+            label: `Open ${match.exact.appName}`,
+            androidPackage: match.exact.packageName,
+            androidIntent: `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${match.exact.packageName};end`,
+            requiresConfirmation: false,
+          },
+        };
+      } else if (match.candidates.length > 1) {
+        const names = match.candidates.slice(0, 4).map((c) => c.appName).join(", ");
+        return {
+          type: "reply",
+          content: `I found multiple matching apps: ${names}. Which one would you like me to open?`,
+        };
+      } else if (match.cleanedTarget.length > 2) {
+        return {
+          type: "action",
+          action: {
+            kind: "install_app",
+            label: `App "${match.cleanedTarget}" is not installed. Find on Google Play Store?`,
+            url: `https://play.google.com/store/search?q=${encodeURIComponent(match.cleanedTarget)}&c=apps`,
+            requiresConfirmation: true,
+            status: "pending",
+          },
+        };
+      }
+    }
+  }
 
   if (parsed.type === "none") return { type: "ai" };
   if (parsed.type === "clarify" || parsed.type === "unsupported") {

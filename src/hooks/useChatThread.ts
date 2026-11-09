@@ -87,7 +87,10 @@ export function useChatThread(options: ThreadOptions) {
       });
     return () => {
       cancelled = true;
-      abortRef.current?.abort();
+      // Only abort in-flight request if the user actively switched to a DIFFERENT conversation
+      if (conversationId && activeIdRef.current && activeIdRef.current !== conversationId) {
+        abortRef.current?.abort();
+      }
     };
   }, [conversationId, reloadKey]);
 
@@ -138,16 +141,19 @@ export function useChatThread(options: ThreadOptions) {
         }
         if (speakReplies && !controller.signal.aborted) speakReply(content, language);
       } else if (!controller.signal.aborted) {
-        throw new Error("The AI sent an empty response. Please try again.");
+        throw new Error("The AI sent an empty response. Please check your Gemini API key in Settings and try again.");
       }
       await touchConversation(conv);
       onChanged();
     } catch (err) {
       if (isActive()) {
-        setError({
-          message: errorMessage(err, "The AI could not reply."),
-          retry: () => void exclusive(() => generate(conv, history)),
-        });
+        const isAbort = controller.signal.aborted || (err instanceof Error && err.name === "AbortError");
+        if (!isAbort) {
+          setError({
+            message: errorMessage(err, "The AI could not reply."),
+            retry: () => void exclusive(() => generate(conv, history)),
+          });
+        }
       }
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
@@ -260,7 +266,15 @@ export function useChatThread(options: ThreadOptions) {
     streamingText,
     error,
     send,
-    stop: () => abortRef.current?.abort(),
+    stop: () => {
+      if (abortRef.current) {
+        abortRef.current.abort();
+        abortRef.current = null;
+      }
+      setStreamingText(null);
+      busyRef.current = false;
+      setBusy(false);
+    },
     regenerate,
     editAndResend,
     confirmActionCard: (message: ChatMessage) => void exclusive(() => transformAction(message, confirmAction)),

@@ -148,10 +148,10 @@ export function PermissionWizard({ onComplete }: PermissionWizardProps) {
             <button
               type="button"
               onClick={handleFinish}
-              className="text-xs font-medium text-slate-400 hover:text-slate-100 underline underline-offset-4"
-              title="Skip setup and open main chat directly"
+              className="text-xs font-semibold text-cyan-400 hover:text-cyan-300 underline underline-offset-4"
+              title="Skip all setup and open main chat directly"
             >
-              Skip to Chat
+              Skip All &amp; Start Chat
             </button>
           </div>
         </div>
@@ -335,7 +335,7 @@ export function PermissionWizard({ onComplete }: PermissionWizardProps) {
                   onClick={() => setStep(5)}
                   className="btn-ghost text-xs"
                 >
-                  {accessState === "granted" ? "Continue" : "Skip for now"}
+                  {accessState === "granted" ? "Continue" : "Skip for Now / Do This Later"}
                 </button>
                 {accessState === "granted" && (
                   <button

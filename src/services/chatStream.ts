@@ -37,6 +37,35 @@ function buildSystemPrompt(mode: ChatMode, language: Language): string {
   return `${BASE_PERSONA}${mode === "agent" ? AGENT_RULES : ""} ${langRule}`;
 }
 
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs: number,
+  externalSignal?: AbortSignal
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("Request timed out")), timeoutMs);
+
+  const abortHandler = () => controller.abort(externalSignal?.reason);
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      clearTimeout(timer);
+      throw new Error("Generation cancelled by user.");
+    }
+    externalSignal.addEventListener("abort", abortHandler, { once: true });
+  }
+
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(timer);
+    if (externalSignal) {
+      externalSignal.removeEventListener("abort", abortHandler);
+    }
+  }
+}
+
 async function streamFromGeminiDirect(
   apiKey: string,
   options: StreamOptions
@@ -44,13 +73,13 @@ async function streamFromGeminiDirect(
   const systemPrompt = buildSystemPrompt(options.mode, options.language);
 
   // Dynamically determine the best effective model discovered for this user's key
-  const primaryModel = await getEffectiveModel(apiKey);
+  // Fast path: use cached discovered models first so chat never hangs waiting for models.list
   const cachedModels = getCachedDiscoveredModels();
+  const primaryModel = await getEffectiveModel(apiKey);
   const modelsToTry = Array.from(
     new Set([
       primaryModel,
       ...cachedModels,
-      "gemini-3.8-flash",
       "gemini-2.5-flash",
       "gemini-2.0-flash",
       "gemini-1.5-flash",
@@ -64,15 +93,28 @@ async function streamFromGeminiDirect(
     parts: [{ text: m.content }],
   }));
 
-  const requestBody = {
-    systemInstruction: {
-      parts: [{ text: systemPrompt }],
-    },
-    contents,
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 4096,
-    },
+  const buildBody = (includeSystemInstruction: boolean) => {
+    if (includeSystemInstruction) {
+      return {
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents,
+        generationConfig: { temperature: 0.7, maxOutputTokens: 4096 },
+      };
+    }
+    // Fallback if systemInstruction is not supported: prepend system prompt to first user message
+    const fallbackContents = contents.map((c, idx) => {
+      if (idx === 0 && c.role === "user") {
+        return {
+          role: "user",
+          parts: [{ text: `[System Instructions: ${systemPrompt}]\n\n${c.parts[0]?.text ?? ""}` }],
+        };
+      }
+      return c;
+    });
+    return {
+      contents: fallbackContents,
+      generationConfig: { temperature: 0.7, maxOutputTokens: 4096 },
+    };
   };
 
   let lastError: Error | null = null;
@@ -82,114 +124,141 @@ async function streamFromGeminiDirect(
       throw new Error("Generation cancelled by user.");
     }
 
-    try {
-      // 1. Try streaming endpoint with both query param and header for maximum compatibility
-      const streamEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(
-        apiKey
-      )}`;
-
-      const response = await fetch(streamEndpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify(requestBody),
-        signal: options.signal,
-      });
-
-      if (response.status === 404) {
-        lastError = new Error(`Model ${model} is not available on your Gemini key.`);
-        continue;
-      }
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-        const errorMsg =
-          errorData?.error?.message || `Gemini API returned HTTP ${response.status}.`;
-        if (response.status === 401 || response.status === 403) {
-          throw new Error(
-            `Gemini API key is invalid or unauthorized: ${errorMsg}. Please check your API key in Settings.`
-          );
-        }
-        if (response.status === 429) {
-          throw new Error(
-            "Gemini rate limit or quota exceeded. Please wait a few seconds and try again."
-          );
-        }
-        if (response.status >= 500) {
-          lastError = new Error(`Google Gemini service error (HTTP ${response.status}): ${errorMsg}`);
-          continue;
-        }
-        throw new Error(errorMsg);
-      }
-
-      if (!response.body) {
-        // Fallback to non-streaming if stream body is missing
-        return await fetchGeminiNonStreaming(apiKey, model, requestBody, options);
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let fullText = "";
-      let buffer = "";
+    // Try with system instruction first, then without if 400 is returned
+    for (const withSystem of [true, false]) {
+      const requestBody = buildBody(withSystem);
 
       try {
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
+        // Attempt 1: Fast direct non-streaming fallback if stream fails or hangs
+        const streamEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(
+          apiKey
+        )}`;
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
+        let response: Response;
+        try {
+          response = await fetchWithTimeout(
+            streamEndpoint,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-goog-api-key": apiKey,
+              },
+              body: JSON.stringify(requestBody),
+            },
+            10000, // 10s connection timeout
+            options.signal
+          );
+        } catch (fetchErr) {
+          if (options.signal.aborted) throw new Error("Generation cancelled by user.");
+          // If streaming connection fails or times out, immediately attempt direct generateContent
+          const direct = await fetchGeminiNonStreaming(apiKey, model, requestBody, options);
+          if (direct.trim()) return direct;
+          throw fetchErr;
+        }
 
-          for (const rawLine of lines) {
-            const line = rawLine.trim();
-            if (!line.startsWith("data:")) continue;
-            const payload = line.slice(5).trim();
-            if (payload === "[DONE]") return fullText;
+        if (response.status === 404) {
+          lastError = new Error(`Model ${model} is not available for your Gemini key.`);
+          break; // Try next model
+        }
 
-            try {
-              const parsed = JSON.parse(payload);
-              if (parsed.error) {
-                throw new Error(parsed.error.message || "Gemini streaming error.");
-              }
-              const candidate = parsed?.candidates?.[0];
-              const parts = candidate?.content?.parts ?? [];
-              for (const part of parts) {
-                if (typeof part.text === "string" && part.text) {
-                  fullText += part.text;
-                  options.onText(fullText);
+        if (response.status === 400 && withSystem) {
+          const errData = await response.json().catch(() => null);
+          const msg = errData?.error?.message || "";
+          if (msg.toLowerCase().includes("system") || msg.toLowerCase().includes("instruction")) {
+            // Model doesn't support systemInstruction field, retry with prepended system prompt
+            continue;
+          }
+        }
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => null);
+          const errorMsg =
+            errorData?.error?.message || `Google Gemini returned HTTP ${response.status}.`;
+          if (response.status === 401 || response.status === 403) {
+            throw new Error(
+              `Gemini API key is invalid or unauthorized: ${errorMsg}. Please open Settings -> Gemini API Key to verify your key.`
+            );
+          }
+          if (response.status === 429) {
+            throw new Error(
+              "Gemini quota or rate limit exceeded. Please wait a few moments and try again."
+            );
+          }
+          if (response.status >= 500) {
+            lastError = new Error(`Google Gemini server error (HTTP ${response.status}). Retrying...`);
+            break;
+          }
+          throw new Error(errorMsg);
+        }
+
+        if (!response.body) {
+          return await fetchGeminiNonStreaming(apiKey, model, requestBody, options);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let fullText = "";
+        let buffer = "";
+
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+
+            for (const rawLine of lines) {
+              const line = rawLine.trim();
+              if (!line.startsWith("data:")) continue;
+              const payload = line.slice(5).trim();
+              if (payload === "[DONE]") return fullText;
+
+              try {
+                const parsed = JSON.parse(payload);
+                if (parsed.error) {
+                  throw new Error(parsed.error.message || "Gemini streaming error.");
                 }
-              }
-            } catch (jsonErr) {
-              if (jsonErr instanceof Error && jsonErr.message.includes("Gemini")) {
-                throw jsonErr;
+                const candidate = parsed?.candidates?.[0];
+                const parts = candidate?.content?.parts ?? [];
+                for (const part of parts) {
+                  if (typeof part.text === "string" && part.text) {
+                    fullText += part.text;
+                    options.onText(fullText);
+                  }
+                }
+              } catch (jsonErr) {
+                if (jsonErr instanceof Error && jsonErr.message.includes("Gemini")) {
+                  throw jsonErr;
+                }
               }
             }
           }
+        } finally {
+          reader.releaseLock();
         }
-      } finally {
-        reader.releaseLock();
-      }
 
-      if (fullText.trim().length > 0) {
-        return fullText;
-      }
+        if (fullText.trim().length > 0) {
+          return fullText;
+        }
 
-      // If stream ended without text, attempt non-streaming fallback for this model
-      const nonStreamReply = await fetchGeminiNonStreaming(apiKey, model, requestBody, options);
-      if (nonStreamReply.trim().length > 0) {
-        return nonStreamReply;
+        // If stream finished with empty text, attempt non-streaming fallback
+        const nonStream = await fetchGeminiNonStreaming(apiKey, model, requestBody, options);
+        if (nonStream.trim()) return nonStream;
+      } catch (err) {
+        if (options.signal.aborted) throw err;
+        if (err instanceof Error && err.name === "AbortError") throw err;
+        lastError = err instanceof Error ? err : new Error(String(err));
       }
-    } catch (err) {
-      if (options.signal.aborted) throw err;
-      if (err instanceof Error && err.name === "AbortError") throw err;
-      lastError = err instanceof Error ? err : new Error(String(err));
     }
   }
 
-  throw lastError ?? new Error("Failed to get response from Gemini service. Check your API key and network.");
+  throw (
+    lastError ??
+    new Error("Unable to get reply from Google Gemini. Please check your API key in Settings and try again.")
+  );
 }
 
 async function fetchGeminiNonStreaming(
@@ -201,15 +270,20 @@ async function fetchGeminiNonStreaming(
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
     apiKey
   )}`;
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": apiKey,
+
+  const response = await fetchWithTimeout(
+    endpoint,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify(requestBody),
     },
-    body: JSON.stringify(requestBody),
-    signal: options.signal,
-  });
+    15000, // 15s timeout
+    options.signal
+  );
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => null);
