@@ -156,15 +156,25 @@ export async function getEffectiveModel(apiKey: string | null): Promise<string> 
   const selected = getStoredSelectedModel();
   if (selected) return selected;
 
+  // 1. Fast path: Use cached discovered models immediately to prevent network delay on chat streams
+  const cached = getCachedDiscoveredModels();
+  if (cached && cached.length > 0) {
+    if (apiKey) {
+      // Refresh cache asynchronously in background without blocking current chat turn
+      void discoverGeminiModels(apiKey).catch(() => {});
+    }
+    return selectBestFlashModel(cached);
+  }
+
+  // 2. Synchronous fallback if no cached models exist yet
   if (apiKey) {
     try {
       const discovered = await discoverGeminiModels(apiKey);
       return selectBestFlashModel(discovered);
     } catch {
-      // Fallback if discovery fails offline
+      // Fallback if offline or discovery error
     }
   }
 
-  const cached = getCachedDiscoveredModels();
-  return selectBestFlashModel(cached);
+  return "gemini-2.5-flash";
 }

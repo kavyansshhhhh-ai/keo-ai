@@ -11,6 +11,7 @@ import { useSettings } from "@/hooks/useSettings";
 import { errorMessage } from "@/lib/errors";
 import { updateConversation } from "@/services/chatRepository";
 import { isNativeApp } from "@/services/native/keoNative";
+import { App as CapApp } from "@capacitor/app";
 import type { ChatMode, Conversation } from "@/types/chat";
 
 type Screen = "chat" | "settings";
@@ -28,6 +29,41 @@ export default function App() {
   const [showWizard, setShowWizard] = useState(() => {
     return isNativeApp() && !localStorage.getItem("keo_onboarding_completed");
   });
+
+  // Native Android Back Button Navigation
+  useEffect(() => {
+    if (!isNativeApp()) return;
+
+    let removeListener: (() => void) | undefined;
+    CapApp.addListener("backButton", ({ canGoBack }) => {
+      if (showWizard) return; // PermissionWizard manages its own back button step flow
+      if (historyOpen) {
+        setHistoryOpen(false);
+        return;
+      }
+      if (profileOpen) {
+        setProfileOpen(false);
+        return;
+      }
+      if (screen === "settings") {
+        setScreen("chat");
+        return;
+      }
+      if (canGoBack) {
+        window.history.back();
+      } else {
+        void CapApp.exitApp();
+      }
+    })
+      .then((handle) => {
+        removeListener = () => void handle.remove();
+      })
+      .catch((err) => console.warn("[KEO] backButton setup error:", err));
+
+    return () => {
+      if (removeListener) removeListener();
+    };
+  }, [showWizard, historyOpen, profileOpen, screen]);
 
   useEffect(() => {
     const goOnline = () => setOnline(true);

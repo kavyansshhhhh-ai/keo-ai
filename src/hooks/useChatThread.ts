@@ -183,14 +183,26 @@ export function useChatThread(options: ThreadOptions) {
         append(conv, userMessage);
 
         if (plan && plan.type !== "ai") {
-          const reply = await insertMessage({
-            conversation_id: conv,
-            role: "assistant",
-            content: plan.type === "reply" ? plan.content : plan.action.label,
-            action: plan.type === "action" ? plan.action : null,
-          });
+          if (plan.type === "multi_action") {
+            for (const act of plan.actions) {
+              const reply = await insertMessage({
+                conversation_id: conv,
+                role: "assistant",
+                content: act.label,
+                action: act,
+              });
+              append(conv, reply);
+            }
+          } else {
+            const reply = await insertMessage({
+              conversation_id: conv,
+              role: "assistant",
+              content: plan.type === "reply" ? plan.content : plan.action.label,
+              action: plan.type === "action" ? plan.action : null,
+            });
+            append(conv, reply);
+          }
           await touchConversation(conv);
-          append(conv, reply);
           onChanged();
           return true;
         }

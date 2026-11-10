@@ -9,6 +9,7 @@ import type { ActionOutcome, AgentAction } from "@/types/chat";
 export type TurnPlan =
   | { type: "reply"; content: string }
   | { type: "action"; action: AgentAction }
+  | { type: "multi_action"; actions: AgentAction[] }
   | { type: "ai" };
 
 const ANDROID_ONLY_DETAIL =
@@ -113,6 +114,37 @@ export async function executeAction(action: AgentAction): Promise<ActionOutcome>
 }
 
 export async function planAgentTurn(text: string): Promise<TurnPlan> {
+  // Multi-step agent execution: Check for multi-command sequence delimiters ("then", "and then", "after that", ";")
+  const multiDelim = /\s+(?:and\s+then|then|after\s+that|and\s+also|;)\s+/i;
+  if (multiDelim.test(text)) {
+    const parts = text.split(multiDelim).map((p) => p.trim()).filter(Boolean);
+    if (parts.length > 1) {
+      const actions: AgentAction[] = [];
+      for (const part of parts) {
+        const subResult = routeCommandFast(part);
+        const parsed = subResult.handledLocally ? subResult.parsed : parseCommand(part);
+        if (parsed.type === "action") {
+          const draft: AgentAction = { ...parsed.action, status: "pending" };
+          if (draft.requiresConfirmation) {
+            actions.push(draft);
+          } else {
+            const outcome = await executeAction(draft);
+            actions.push({ ...draft, status: outcome.status, detail: outcome.detail });
+            // Handle failures safely: if an auto-executed step fails, halt remaining automated steps
+            if (outcome.status === "failed") {
+              break;
+            }
+          }
+        }
+      }
+      if (actions.length > 1) {
+        return { type: "multi_action", actions };
+      } else if (actions.length === 1) {
+        return { type: "action", action: actions[0] };
+      }
+    }
+  }
+
   const fastResult = routeCommandFast(text);
   let parsed = fastResult.handledLocally ? fastResult.parsed : parseCommand(text);
 
