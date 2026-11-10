@@ -71,15 +71,28 @@ export function useChatThread(options: ThreadOptions) {
   };
 
   useEffect(() => {
+    const prevId = activeIdRef.current;
     activeIdRef.current = conversationId;
+
     cancelPendingBatch();
     latestTextRef.current = "";
     isFirstTokenRef.current = true;
 
+    // Check if this effect run is the new-conversation activation from send()
     if (conversationId !== null && skipLoadRef.current === conversationId) {
       skipLoadRef.current = null;
       return;
     }
+
+    // When switching away from a previous conversation, abort any active in-flight request
+    if (prevId !== conversationId && abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+      setStreamingText(null);
+      busyRef.current = false;
+      setBusy(false);
+    }
+
     setMessages([]);
     setError(null);
     setStreamingText(null);
@@ -106,8 +119,15 @@ export function useChatThread(options: ThreadOptions) {
     return () => {
       cancelled = true;
       cancelPendingBatch();
-      if (conversationId && activeIdRef.current && activeIdRef.current !== conversationId) {
-        abortRef.current?.abort();
+      // On conversation switch or component unmount, abort active generation if not internal send() activation
+      if (skipLoadRef.current === null) {
+        if (abortRef.current) {
+          abortRef.current.abort();
+          abortRef.current = null;
+        }
+        setStreamingText(null);
+        busyRef.current = false;
+        setBusy(false);
       }
     };
   }, [conversationId, reloadKey]);

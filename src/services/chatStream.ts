@@ -82,27 +82,50 @@ async function fetchWithTimeout(
   }
 }
 
-function readWithTimeout<T>(
+export function readWithTimeout<T>(
   reader: ReadableStreamDefaultReader<T>,
   timeoutMs: number,
   signal?: AbortSignal
 ): Promise<ReadableStreamReadResult<T>> {
   return new Promise((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-      timer = null;
-      reject(new Error("Stream read timeout"));
-    }, timeoutMs);
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
-    const onAbort = () => {
-      if (timer) {
+    const cleanup = () => {
+      if (timer !== null) {
         clearTimeout(timer);
         timer = null;
       }
-      reject(new Error("Generation cancelled by user."));
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    };
+
+    const settleReject = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try {
+        reader.cancel().catch(() => {});
+      } catch {
+        // Reader may already be closed or released
+      }
+      reject(err);
+    };
+
+    const settleResolve = (res: ReadableStreamReadResult<T>) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(res);
+    };
+
+    const onAbort = () => {
+      settleReject(new Error("Generation cancelled by user."));
     };
 
     if (signal?.aborted) {
-      onAbort();
+      settleReject(new Error("Generation cancelled by user."));
       return;
     }
 
@@ -110,27 +133,16 @@ function readWithTimeout<T>(
       signal.addEventListener("abort", onAbort, { once: true });
     }
 
+    timer = setTimeout(() => {
+      timer = null;
+      settleReject(new Error("Stream read timeout"));
+    }, timeoutMs);
+
     reader
       .read()
-      .then((res) => {
-        if (timer) {
-          clearTimeout(timer);
-          timer = null;
-        }
-        if (signal) {
-          signal.removeEventListener("abort", onAbort);
-        }
-        resolve(res);
-      })
+      .then(settleResolve)
       .catch((err) => {
-        if (timer) {
-          clearTimeout(timer);
-          timer = null;
-        }
-        if (signal) {
-          signal.removeEventListener("abort", onAbort);
-        }
-        reject(err);
+        settleReject(err instanceof Error ? err : new Error(String(err)));
       });
   });
 }
