@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { App as CapApp } from "@capacitor/app";
 import { isNativeApp, KeoNative, type NativePermissionState } from "@/services/native/keoNative";
+import { checkAllPermissions } from "@/services/permissionManager";
 
 interface PermissionWizardProps {
   onComplete: () => void;
@@ -31,19 +32,11 @@ export function PermissionWizard({ onComplete }: PermissionWizardProps) {
   const [showRestrictedHelp, setShowRestrictedHelp] = useState(false);
 
   const checkAllStatuses = useCallback(async () => {
-    if (!isNativeApp()) {
-      setNotifState("granted");
-      setCameraState("granted");
-      setAccessState("denied");
-      return;
-    }
     try {
-      const n = await KeoNative.checkPermission({ permission: "notifications" });
-      setNotifState(n.state);
-      const c = await KeoNative.checkPermission({ permission: "camera" });
-      setCameraState(c.state);
-      const a = await KeoNative.isAccessibilityEnabled();
-      setAccessState(a.enabled ? "granted" : "denied");
+      const perms = await checkAllPermissions();
+      setNotifState(perms.notifications);
+      setCameraState(perms.camera);
+      setAccessState(perms.accessibility);
     } catch (err) {
       console.warn("[KEO] Failed to check permission statuses:", err);
     }

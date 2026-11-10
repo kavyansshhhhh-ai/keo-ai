@@ -13,7 +13,7 @@ export type NativeScreen =
   | "gallery"
   | "appDetails";
 
-export type NativePermissionKind = "microphone" | "camera" | "notifications" | "accessibility";
+export type NativePermissionKind = "microphone" | "camera" | "notifications" | "accessibility" | "location";
 export type NativePermissionState = "granted" | "denied" | "prompt" | "prompt-with-rationale";
 
 export interface InstalledAppInfo {
@@ -29,6 +29,7 @@ interface KeoNativePlugin {
   getClipboardText(): Promise<{ text: string }>;
   setTorch(options: { on: boolean }): Promise<{ supported: boolean }>;
   getBatteryStatus(): Promise<{ level: number; charging: boolean; available: boolean }>;
+  isLocationEnabled(): Promise<{ enabled: boolean; gps: boolean; network: boolean }>;
   isAccessibilityEnabled(): Promise<{ enabled: boolean }>;
   performAccessibilityAction(options: {
     action: "findAndClick" | "findAndType" | "navigateBack" | "readScreenText" | "sendWhatsAppMessage" | "scrollForward" | "scrollBackward";

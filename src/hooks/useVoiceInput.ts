@@ -3,6 +3,8 @@ import { KeoNative, isNativeApp } from "@/services/native/keoNative";
 import { createVoiceSession, isSpeechInputSupported, type VoiceSession } from "@/services/voice";
 import type { Language } from "@/types/chat";
 
+import { checkPermission, requestPermission } from "@/services/permissionManager";
+
 export type MicGate = "explain" | "blocked" | null;
 
 export function useVoiceInput(language: Language, onFinal: (text: string) => void) {
@@ -31,6 +33,9 @@ export function useVoiceInput(language: Language, onFinal: (text: string) => voi
         setError(message);
         setListening(false);
         setInterim("");
+        if (message.toLowerCase().includes("blocked") || message.toLowerCase().includes("not allowed")) {
+          setMicGate("blocked");
+        }
       },
       onEnd: () => {
         setListening(false);
@@ -57,8 +62,8 @@ export function useVoiceInput(language: Language, onFinal: (text: string) => voi
       startSession();
       return;
     }
-    void KeoNative.checkPermission({ permission: "microphone" })
-      .then(({ state }) => {
+    void checkPermission("microphone")
+      .then((state) => {
         if (state === "granted") startSession();
         else if (state === "denied") setMicGate("blocked");
         else setMicGate("explain");
@@ -68,8 +73,12 @@ export function useVoiceInput(language: Language, onFinal: (text: string) => voi
 
   const allowMicrophone = useCallback(() => {
     setMicGate(null);
-    void KeoNative.requestPermission({ permission: "microphone" })
-      .then(({ state }) => {
+    if (!isNativeApp()) {
+      startSession();
+      return;
+    }
+    void requestPermission("microphone")
+      .then((state) => {
         if (state === "granted") startSession();
         else setMicGate("blocked");
       })

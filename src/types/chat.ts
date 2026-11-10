@@ -27,7 +27,15 @@ export type AgentActionKind =
   | "share"
   | "install_app";
 
-export type AgentActionStatus = "pending" | "done" | "cancelled" | "failed";
+export type AgentActionStatus =
+  | "waiting"
+  | "pending"
+  | "permission_required"
+  | "running"
+  | "done"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 export interface AgentAction {
   kind: AgentActionKind;

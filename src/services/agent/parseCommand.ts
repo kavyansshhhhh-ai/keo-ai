@@ -11,7 +11,6 @@ import {
   buildSearch,
   buildSettings,
   buildSettingsPage,
-  buildShare,
   buildWhatsAppDraft,
 } from "@/services/agent/actionBuilders";
 import type { AgentAction } from "@/types/chat";
@@ -38,7 +37,7 @@ const YOUTUBE_WORD = /\b(youtube|yt)\b/i;
 const FLASHLIGHT_WORD = /\b(flashlight|flash\s*light|torch)\b/i;
 const FLASHLIGHT_OFF = /\b(off|band|bandh|bujhao|bujha|disable|turn\s*off)\b/i;
 const BATTERY_WORD = /\bbattery\b/i;
-const SHARE_WORD = /\bshare\b/i;
+const LOCATION_WORD = /\b(location|gps|position|location\s*settings?)\b/i;
 const WIFI_WORD = /\bwi-?fi\b/i;
 const BLUETOOTH_WORD = /\bbluetooth\b/i;
 const INSTALL_VERB = /\b(install|download)\b/i;
@@ -118,11 +117,22 @@ export function parseCommand(input: string): ParsedCommand {
     return { type: "action", action: buildEmailDraft(address?.[0] ?? "", body) };
   }
 
-  if (WHATSAPP_WORD.test(text) && COMPOSE_VERB.test(text)) {
+  if (LOCATION_WORD.test(text)) {
+    return { type: "action", action: buildSettingsPage("location") };
+  }
+
+  if (WHATSAPP_WORD.test(text)) {
+    const msgMatch = text.match(/\b(?:message|msg|send|text|bolo|write|say)\s+([a-zA-Z0-9_\-+]+)\s+(.+)/i) ||
+                     text.match(/\bwhats\s?app\s+([a-zA-Z0-9_\-+]+)\s+(.+)/i);
+    if (msgMatch) {
+      const rawContact = msgMatch[1].replace(/^(and|to|ko|pe|par)$/i, "").trim();
+      const messageBody = msgMatch[2].replace(/\b(on\s+whats\s?app|whats\s?app|pe|par|ko)\b/gi, "").trim();
+      return { type: "action", action: buildWhatsAppDraft(rawContact, messageBody || "hi") };
+    }
     const phoneMatch = text.match(/\+?\d[\d\s-]{7,}\d/);
     const phone = phoneMatch ? phoneMatch[0].replace(/\D/g, "") : "";
     const body = cleanQuery(text.replace(WHATSAPP_WORD, " ").replace(phoneMatch?.[0] ?? "", " "));
-    return { type: "action", action: buildWhatsAppDraft(phone, body) };
+    return { type: "action", action: buildWhatsAppDraft(phone || "WhatsApp Contact", body || "hi") };
   }
 
   if (NAV_WORD.test(text)) {
@@ -143,12 +153,6 @@ export function parseCommand(input: string): ParsedCommand {
 
   if (BATTERY_WORD.test(text)) {
     return { type: "action", action: buildBattery() };
-  }
-
-  if (SHARE_WORD.test(text)) {
-    const shared = text.replace(/^.*?\bshare\b/i, "").replace(/^[\s:,-]*(this|that|it)?[\s:,-]*/i, "").trim();
-    if (!shared) return { type: "clarify", message: "What should I share? For example, \"share I'm running late\"." };
-    return { type: "action", action: buildShare(shared) };
   }
 
   if (INSTALL_VERB.test(text)) {

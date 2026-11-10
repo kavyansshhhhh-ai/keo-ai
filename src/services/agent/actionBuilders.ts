@@ -111,12 +111,20 @@ export function buildSettings(): ActionDraft {
   };
 }
 
-export function buildSettingsPage(page: "wifi" | "bluetooth"): ActionDraft {
+export function buildSettingsPage(page: "wifi" | "bluetooth" | "location"): ActionDraft {
   if (page === "wifi") {
     return {
       kind: "open_wifi_settings",
       label: "Open Wi-Fi settings",
       androidIntent: "intent:#Intent;action=android.settings.WIFI_SETTINGS;end",
+      requiresConfirmation: false,
+    };
+  }
+  if (page === "location") {
+    return {
+      kind: "open_wifi_settings",
+      label: "Open Location Settings (Android requires user tap to toggle GPS)",
+      androidIntent: "intent:#Intent;action=android.settings.LOCATION_SOURCE_SETTINGS;end",
       requiresConfirmation: false,
     };
   }
@@ -131,14 +139,14 @@ export function buildSettingsPage(page: "wifi" | "bluetooth"): ActionDraft {
 export function buildFlashlight(on: boolean): ActionDraft {
   return {
     kind: "flashlight",
-    label: on ? "Turn on flashlight (needs camera access, used only for the light)" : "Turn off flashlight",
+    label: on ? "Turn on flashlight (needs camera access, used only for torch)" : "Turn off flashlight",
     torch: on,
-    requiresConfirmation: on,
+    requiresConfirmation: false,
   };
 }
 
 export function buildBattery(): ActionDraft {
-  return { kind: "battery", label: "Check battery", requiresConfirmation: false };
+  return { kind: "battery", label: "Check battery status", requiresConfirmation: false };
 }
 
 export function buildShare(text: string): ActionDraft {
@@ -169,13 +177,22 @@ export function buildEmailDraft(to: string, body: string): ActionDraft {
   };
 }
 
-export function buildWhatsAppDraft(phone: string, text: string): ActionDraft {
-  const base = phone ? `https://wa.me/${phone}` : "https://wa.me/";
-  const query = text ? `?text=${encodeURIComponent(text)}` : "";
+export function buildWhatsAppDraft(target: string, text: string): ActionDraft {
+  const cleanTarget = target.trim();
+  const isPhone = /^\+?\d+$/.test(cleanTarget);
+  const phone = isPhone ? cleanTarget : "";
+  const label = cleanTarget ? `Prepare WhatsApp message to "${cleanTarget}": "${text}"` : "Prepare WhatsApp message";
+  const url = phone
+    ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
+    : `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
+
   return {
     kind: "prepare_whatsapp",
-    label: phone ? `WhatsApp message to ${phone}` : "Prepare WhatsApp message",
-    url: `${base}${query}`,
+    label,
+    target: cleanTarget,
+    phone,
+    text,
+    url,
     requiresConfirmation: true,
   };
 }

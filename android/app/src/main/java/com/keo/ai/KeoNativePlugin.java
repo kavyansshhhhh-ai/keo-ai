@@ -35,7 +35,8 @@ import java.util.List;
     permissions = {
         @Permission(strings = { Manifest.permission.RECORD_AUDIO }, alias = "microphone"),
         @Permission(strings = { Manifest.permission.CAMERA }, alias = "camera"),
-        @Permission(strings = { Manifest.permission.POST_NOTIFICATIONS }, alias = "notifications")
+        @Permission(strings = { Manifest.permission.POST_NOTIFICATIONS }, alias = "notifications"),
+        @Permission(strings = { Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION }, alias = "location")
     }
 )
 public class KeoNativePlugin extends Plugin {
@@ -44,6 +45,7 @@ public class KeoNativePlugin extends Plugin {
     private static final String CAMERA = "camera";
     private static final String NOTIFICATIONS = "notifications";
     private static final String ACCESSIBILITY = "accessibility";
+    private static final String LOCATION = "location";
 
     @PluginMethod
     public void getInstalledApps(PluginCall call) {
@@ -424,10 +426,28 @@ public class KeoNativePlugin extends Plugin {
         }
     }
 
+    @PluginMethod
+    public void isLocationEnabled(PluginCall call) {
+        android.location.LocationManager lm = (android.location.LocationManager) getContext().getSystemService(Context.LOCATION_SERVICE);
+        boolean gps = false;
+        boolean network = false;
+        if (lm != null) {
+            try { gps = lm.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER); } catch (Exception ignored) {}
+            try { network = lm.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER); } catch (Exception ignored) {}
+        }
+        boolean enabled = gps || network;
+        JSObject result = new JSObject();
+        result.put("enabled", enabled);
+        result.put("gps", gps);
+        result.put("network", network);
+        call.resolve(result);
+    }
+
     private String mapAlias(String permission) {
         if ("microphone".equals(permission)) return MICROPHONE;
         if ("camera".equals(permission)) return CAMERA;
         if ("notifications".equals(permission)) return NOTIFICATIONS;
+        if ("location".equals(permission)) return LOCATION;
         return null;
     }
 

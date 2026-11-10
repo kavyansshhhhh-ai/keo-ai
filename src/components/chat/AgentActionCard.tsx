@@ -38,10 +38,14 @@ const ICONS: Record<AgentActionKind, LucideIcon> = {
 };
 
 const STATUS_STYLE: Record<AgentAction["status"], { label: string; className: string }> = {
-  pending: { label: "Needs your confirmation", className: "bg-warning-400/15 text-warning-300" },
-  done: { label: "Done", className: "bg-success-400/15 text-success-300" },
-  failed: { label: "Not available", className: "bg-error-500/15 text-error-300" },
-  cancelled: { label: "Cancelled", className: "bg-panel/10 text-muted" },
+  waiting: { label: "Waiting for confirmation", className: "bg-amber-400/15 text-amber-300 border border-amber-400/20" },
+  pending: { label: "Needs your confirmation", className: "bg-amber-400/15 text-amber-300 border border-amber-400/20" },
+  permission_required: { label: "Permission Required", className: "bg-cyan-400/15 text-cyan-300 border border-cyan-400/30" },
+  running: { label: "Running Action...", className: "bg-sky-400/15 text-sky-300 border border-sky-400/30 animate-pulse" },
+  done: { label: "Completed", className: "bg-emerald-400/15 text-emerald-300 border border-emerald-400/20" },
+  completed: { label: "Completed", className: "bg-emerald-400/15 text-emerald-300 border border-emerald-400/20" },
+  failed: { label: "Failed / Not Available", className: "bg-rose-500/15 text-rose-300 border border-rose-500/20" },
+  cancelled: { label: "Cancelled", className: "bg-white/10 text-slate-400 border border-white/10" },
 };
 
 interface AgentActionCardProps {
@@ -51,9 +55,9 @@ interface AgentActionCardProps {
 }
 
 export function AgentActionCard({ action, onConfirm, onCancel }: AgentActionCardProps) {
-  const Icon = ICONS[action.kind];
-  const status = STATUS_STYLE[action.status];
-  const isPending = action.status === "pending";
+  const Icon = ICONS[action.kind] || ExternalLink;
+  const status = STATUS_STYLE[action.status] || STATUS_STYLE.pending;
+  const canConfirm = action.status === "pending" || action.status === "waiting" || action.status === "permission_required";
 
   return (
     <div className="glass rounded-2xl p-4">
@@ -69,7 +73,7 @@ export function AgentActionCard({ action, onConfirm, onCancel }: AgentActionCard
           {action.detail && <p className="mt-2 text-sm leading-relaxed text-muted">{action.detail}</p>}
         </div>
       </div>
-      {isPending && (
+      {canConfirm && (
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={onCancel} className="btn-ghost !px-3 !py-2">
             <X size={16} /> Cancel
