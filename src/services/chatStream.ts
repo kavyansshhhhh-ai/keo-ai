@@ -42,12 +42,22 @@ async function fetchWithTimeout(
   externalSignal?: AbortSignal
 ): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error("Request timed out")), timeoutMs);
+  let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    timer = null;
+    controller.abort(new Error("Request timed out"));
+  }, timeoutMs);
 
-  const abortHandler = () => controller.abort(externalSignal?.reason);
+  const abortHandler = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    controller.abort(externalSignal?.reason ?? new Error("Generation cancelled by user."));
+  };
+
   if (externalSignal) {
     if (externalSignal.aborted) {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       throw new Error("Generation cancelled by user.");
     }
     externalSignal.addEventListener("abort", abortHandler, { once: true });
@@ -56,12 +66,73 @@ async function fetchWithTimeout(
   try {
     const res = await fetch(url, { ...options, signal: controller.signal });
     return res;
+  } catch (err) {
+    if (externalSignal?.aborted) {
+      throw new Error("Generation cancelled by user.");
+    }
+    throw err;
   } finally {
-    clearTimeout(timer);
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
     if (externalSignal) {
-      externalSignal.removeEventListener("abort", externalSignal);
+      externalSignal.removeEventListener("abort", abortHandler);
     }
   }
+}
+
+function readWithTimeout<T>(
+  reader: ReadableStreamDefaultReader<T>,
+  timeoutMs: number,
+  signal?: AbortSignal
+): Promise<ReadableStreamReadResult<T>> {
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      timer = null;
+      reject(new Error("Stream read timeout"));
+    }, timeoutMs);
+
+    const onAbort = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      reject(new Error("Generation cancelled by user."));
+    };
+
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    reader
+      .read()
+      .then((res) => {
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        if (signal) {
+          signal.removeEventListener("abort", onAbort);
+        }
+        resolve(res);
+      })
+      .catch((err) => {
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        if (signal) {
+          signal.removeEventListener("abort", onAbort);
+        }
+        reject(err);
+      });
+  });
 }
 
 async function streamFromGeminiDirect(
@@ -154,10 +225,14 @@ async function streamFromGeminiDirect(
         if (response.status === 429) {
           throw new Error("Gemini quota or rate limit exceeded. Please wait a moment.");
         }
+        if (response.status === 400) {
+          throw new Error(`Gemini API request error: ${errorMsg}`);
+        }
         throw new Error(errorMsg);
       }
 
       if (!response.body) {
+        if (options.signal.aborted) throw new Error("Generation cancelled by user.");
         const nonStream = await fetchGeminiNonStreaming(apiKey, model, requestBody, options);
         perfTracker.finishRequest();
         return nonStream;
@@ -168,19 +243,10 @@ async function streamFromGeminiDirect(
       let fullText = "";
       let buffer = "";
 
-      const readWithTimeout = (timeoutMs: number) => {
-        return Promise.race([
-          reader.read(),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("Stream read timeout")), timeoutMs)
-          ),
-        ]);
-      };
-
       try {
         for (;;) {
           if (options.signal.aborted) throw new Error("Generation cancelled by user.");
-          const { value, done } = await readWithTimeout(10000);
+          const { value, done } = await readWithTimeout(reader, 10000, options.signal);
           if (done) break;
 
           buffer += decoder.decode(value, { stream: true });
@@ -215,14 +281,50 @@ async function streamFromGeminiDirect(
             }
           }
         }
-      } catch {
-        if (!fullText.trim()) {
-          const nonStream = await fetchGeminiNonStreaming(apiKey, model, requestBody, options);
-          perfTracker.finishRequest();
-          return nonStream;
+
+        // Process final trailing buffer chunk if present
+        if (buffer.trim()) {
+          const rawLine = buffer.trim();
+          if (rawLine.startsWith("data:")) {
+            const payload = rawLine.slice(5).trim();
+            if (payload && payload !== "[DONE]") {
+              try {
+                const parsed = JSON.parse(payload);
+                const candidate = parsed?.candidates?.[0];
+                const parts = candidate?.content?.parts ?? [];
+                for (const part of parts) {
+                  if (typeof part.text === "string" && part.text && !part.thought) {
+                    fullText += part.text;
+                    perfTracker.recordFirstToken();
+                    perfTracker.recordProgress(fullText.length);
+                    options.onText(fullText);
+                  }
+                }
+              } catch {
+                // Ignore parse errors on trailing fragment
+              }
+            }
+          }
         }
+      } catch {
+        if (options.signal.aborted) {
+          throw new Error("Generation cancelled by user.");
+        }
+        // If partial text was received before error/timeout, preserve and return it!
+        if (fullText.trim()) {
+          perfTracker.finishRequest();
+          return fullText;
+        }
+        // If no text arrived and not cancelled, fallback once to non-streaming
+        const nonStream = await fetchGeminiNonStreaming(apiKey, model, requestBody, options);
+        perfTracker.finishRequest();
+        return nonStream;
       } finally {
-        reader.releaseLock();
+        try {
+          reader.releaseLock();
+        } catch {
+          // Stream already closed
+        }
       }
 
       if (fullText.trim().length > 0) {
@@ -230,12 +332,13 @@ async function streamFromGeminiDirect(
         return fullText;
       }
 
+      if (options.signal.aborted) throw new Error("Generation cancelled by user.");
       const nonStream = await fetchGeminiNonStreaming(apiKey, model, requestBody, options);
       perfTracker.finishRequest();
       if (nonStream.trim()) return nonStream;
     } catch (err) {
-      if (options.signal.aborted) throw err;
-      if (err instanceof Error && err.name === "AbortError") throw err;
+      if (options.signal.aborted) throw new Error("Generation cancelled by user.");
+      if (err instanceof Error && err.name === "AbortError") throw new Error("Generation cancelled by user.");
       lastError = err instanceof Error ? err : new Error(String(err));
     }
   }
@@ -252,6 +355,10 @@ async function fetchGeminiNonStreaming(
   requestBody: unknown,
   options: StreamOptions
 ): Promise<string> {
+  if (options.signal.aborted) {
+    throw new Error("Generation cancelled by user.");
+  }
+
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
     apiKey
   )}`;

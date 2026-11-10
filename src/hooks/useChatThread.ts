@@ -52,13 +52,30 @@ export function useChatThread(options: ThreadOptions) {
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [error, setError] = useState<ThreadError | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+
   const activeIdRef = useRef<string | null>(conversationId);
   const busyRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const skipLoadRef = useRef<string | null>(null);
 
+  // RAF UI batching refs for smooth 30-60 FPS streaming without render lag
+  const rafIdRef = useRef<number | null>(null);
+  const latestTextRef = useRef<string>("");
+  const isFirstTokenRef = useRef<boolean>(true);
+
+  const cancelPendingBatch = () => {
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+  };
+
   useEffect(() => {
     activeIdRef.current = conversationId;
+    cancelPendingBatch();
+    latestTextRef.current = "";
+    isFirstTokenRef.current = true;
+
     if (conversationId !== null && skipLoadRef.current === conversationId) {
       skipLoadRef.current = null;
       return;
@@ -85,9 +102,10 @@ export function useChatThread(options: ThreadOptions) {
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
+
     return () => {
       cancelled = true;
-      // Only abort in-flight request if the user actively switched to a DIFFERENT conversation
+      cancelPendingBatch();
       if (conversationId && activeIdRef.current && activeIdRef.current !== conversationId) {
         abortRef.current?.abort();
       }
@@ -114,6 +132,7 @@ export function useChatThread(options: ThreadOptions) {
     const controller = new AbortController();
     abortRef.current = controller;
     const isActive = () => activeIdRef.current === conv;
+
     const wire = history
       .filter((m) => m.content.trim().length > 0)
       .slice(-contextMessages)
@@ -122,6 +141,10 @@ export function useChatThread(options: ThreadOptions) {
 
     setError(null);
     setStreamingText("");
+    latestTextRef.current = "";
+    isFirstTokenRef.current = true;
+    cancelPendingBatch();
+
     try {
       const reply = await streamChatReply({
         messages: wire,
@@ -129,10 +152,32 @@ export function useChatThread(options: ThreadOptions) {
         language,
         signal: controller.signal,
         onText: (text) => {
-          if (isActive()) setStreamingText(text);
+          if (!isActive()) return;
+          latestTextRef.current = text;
+
+          // Zero-delay instant flush for the very first token to minimize TTFT
+          if (isFirstTokenRef.current) {
+            isFirstTokenRef.current = false;
+            cancelPendingBatch();
+            setStreamingText(text);
+            return;
+          }
+
+          // RAF Batching for subsequent tokens (30-60 FPS UI rendering)
+          if (rafIdRef.current === null) {
+            rafIdRef.current = requestAnimationFrame(() => {
+              rafIdRef.current = null;
+              if (isActive()) {
+                setStreamingText(latestTextRef.current);
+              }
+            });
+          }
         },
       });
-      const content = reply.trim();
+
+      cancelPendingBatch();
+      const content = (reply || latestTextRef.current || "").trim();
+
       if (content) {
         const saved = await insertMessage({ conversation_id: conv, role: "assistant", content });
         if (isActive()) {
@@ -146,6 +191,7 @@ export function useChatThread(options: ThreadOptions) {
       await touchConversation(conv);
       onChanged();
     } catch (err) {
+      cancelPendingBatch();
       if (isActive()) {
         const isAbort = controller.signal.aborted || (err instanceof Error && err.name === "AbortError");
         if (!isAbort) {
@@ -156,6 +202,7 @@ export function useChatThread(options: ThreadOptions) {
         }
       }
     } finally {
+      cancelPendingBatch();
       if (abortRef.current === controller) abortRef.current = null;
       if (isActive()) setStreamingText(null);
     }
@@ -163,12 +210,14 @@ export function useChatThread(options: ThreadOptions) {
 
   async function send(raw: string): Promise<boolean> {
     const text = raw.trim();
-    if (!text) return false;
+    if (!text || busyRef.current) return false;
+
     const result = await exclusive(async () => {
       const plan = mode === "agent" ? await planAgentTurn(text) : null;
       setError(null);
       let conv = conversationId;
       let history = messages;
+
       try {
         if (!conv) {
           const created = await createConversation(mode, DEFAULT_TITLE);
@@ -178,6 +227,7 @@ export function useChatThread(options: ThreadOptions) {
           activeIdRef.current = conv;
           onActivate(created);
         }
+
         const userMessage = await insertMessage({ conversation_id: conv, role: "user", content: text });
         if (history.length === 0) await updateConversation(conv, { title: deriveTitle(text) });
         append(conv, userMessage);
@@ -214,16 +264,18 @@ export function useChatThread(options: ThreadOptions) {
         return false;
       }
     });
+
     return result ?? false;
   }
 
   function regenerate(): void {
-    if (!conversationId) return;
+    if (!conversationId || busyRef.current) return;
     const index = lastAssistantIndex(messages);
     if (index < 1 || messages[index - 1].role !== "user" || messages[index].action) return;
     const target = messages[index];
     const conv = conversationId;
     const history = messages.slice(0, index);
+
     void exclusive(async () => {
       try {
         await deleteMessages([target.id]);
@@ -240,10 +292,12 @@ export function useChatThread(options: ThreadOptions) {
     const text = nextContent.trim();
     const conv = conversationId;
     const index = messages.findIndex((m) => m.id === message.id);
-    if (!conv || !text || index < 0) return;
+    if (!conv || !text || index < 0 || busyRef.current) return;
+
     const removedIds = messages.slice(index + 1).map((m) => m.id);
     const edited: ChatMessage = { ...messages[index], content: text };
     const history = [...messages.slice(0, index), edited];
+
     void exclusive(async () => {
       try {
         await updateMessageContent(edited.id, text);
@@ -279,6 +333,7 @@ export function useChatThread(options: ThreadOptions) {
     error,
     send,
     stop: () => {
+      cancelPendingBatch();
       if (abortRef.current) {
         abortRef.current.abort();
         abortRef.current = null;
