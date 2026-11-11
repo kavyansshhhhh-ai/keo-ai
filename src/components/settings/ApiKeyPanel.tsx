@@ -8,6 +8,7 @@ import {
   setStoredSelectedModel,
   discoverGeminiModels,
   selectBestFlashModel,
+  computeApiKeyHash,
 } from "@/services/modelDiscovery";
 import {
   fetchProviderKeyStatus,
@@ -36,15 +37,48 @@ export function ApiKeyPanel() {
     try {
       const st = await fetchProviderKeyStatus();
       setStatus(st);
-      if (st.configured) {
-        const models = getCachedDiscoveredModels();
-        setAvailableModels(models);
-        const sel = getStoredSelectedModel();
-        const validSelected = sel && models.includes(sel) ? sel : (models[0] || selectBestFlashModel(models));
-        setSelectedModel(validSelected);
-        if (sel !== validSelected) {
-          setStoredSelectedModel(validSelected);
+      const activeKey = getLocalApiKey();
+
+      if (st.configured && activeKey) {
+        const keyHash = await computeApiKeyHash(activeKey);
+        // Load verified cached models for this specific API key
+        const cached = getCachedDiscoveredModels(keyHash);
+        if (cached.length > 0) {
+          setAvailableModels(cached);
+          const sel = getStoredSelectedModel();
+          const best = selectBestFlashModel(cached);
+          const validSelected = sel && cached.includes(sel) ? sel : (best || cached[0]);
+          if (validSelected) {
+            setSelectedModel(validSelected);
+            if (sel !== validSelected) {
+              setStoredSelectedModel(validSelected);
+            }
+          }
+        } else {
+          // Do not show unverified fallback models as confirmed supported models
+          setAvailableModels([]);
         }
+
+        // On opening the panel, refresh model discovery when needed (if no cache or background check)
+        try {
+          const fresh = await discoverGeminiModels(activeKey, false);
+          if (fresh.length > 0) {
+            setAvailableModels(fresh);
+            const sel = getStoredSelectedModel();
+            const best = selectBestFlashModel(fresh);
+            const validSelected = sel && fresh.includes(sel) ? sel : (best || fresh[0]);
+            if (validSelected) {
+              setSelectedModel(validSelected);
+              if (sel !== validSelected) {
+                setStoredSelectedModel(validSelected);
+              }
+            }
+          }
+        } catch (discErr) {
+          console.warn("[KEO] Discovery on settings panel open:", discErr);
+        }
+      } else {
+        setAvailableModels([]);
       }
     } catch (err) {
       setLoadError(errorMessage(err, "Could not check the API key."));
@@ -79,12 +113,16 @@ export function ApiKeyPanel() {
         setStatus(nextStatus);
         setDraft("");
         setShowKey(false);
-        const models = getCachedDiscoveredModels();
+        const keyHash = await computeApiKeyHash(apiKey);
+        const models = getCachedDiscoveredModels(keyHash);
         setAvailableModels(models);
         const sel = getStoredSelectedModel();
-        const effectiveModel = sel || models[0] || "gemini-2.5-flash";
-        setSelectedModel(effectiveModel);
-        setSuccessMessage(`✓ Gemini API Key verified and saved successfully! Connected to Google Gemini (${effectiveModel}).`);
+        const best = selectBestFlashModel(models);
+        const effectiveModel = sel || best || models[0] || "";
+        if (effectiveModel) {
+          setSelectedModel(effectiveModel);
+        }
+        setSuccessMessage(`✓ Gemini API Key verified and saved successfully! Connected to Google Gemini (${effectiveModel || "Active"}).`);
       } catch (err) {
         // Keep draft preserved so user can inspect and fix
         setDraft(apiKey);
@@ -219,10 +257,13 @@ export function ApiKeyPanel() {
       const models = await discoverGeminiModels(apiKey, true);
       setAvailableModels(models);
       const sel = getStoredSelectedModel();
-      const validSelected = sel && models.includes(sel) ? sel : (models[0] || selectBestFlashModel(models));
-      setSelectedModel(validSelected);
-      if (sel !== validSelected) {
-        setStoredSelectedModel(validSelected);
+      const best = selectBestFlashModel(models);
+      const validSelected = sel && models.includes(sel) ? sel : (best || models[0] || "");
+      if (validSelected) {
+        setSelectedModel(validSelected);
+        if (sel !== validSelected) {
+          setStoredSelectedModel(validSelected);
+        }
       }
       setSuccessMessage(`✓ Discovered ${models.length} active Gemini models. Active model: ${validSelected}`);
     } catch (err) {

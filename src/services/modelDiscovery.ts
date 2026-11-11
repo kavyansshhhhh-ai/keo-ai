@@ -5,8 +5,47 @@ export interface GeminiModelInfo {
   supportedGenerationMethods: string[];
 }
 
-const SELECTED_MODEL_STORAGE = "keo_user_selected_model";
-const DISCOVERED_MODELS_STORAGE = "keo_discovered_models";
+export const SELECTED_MODEL_STORAGE = "keo_user_selected_model";
+export const DISCOVERED_MODELS_STORAGE = "keo_discovered_models";
+
+/**
+ * Cache structure stored in localStorage to tie discovered models strictly to an API key hash.
+ */
+export interface DiscoveredCachePayload {
+  apiKeyHash: string;
+  models: string[];
+  timestamp: number;
+}
+
+/**
+ * Computes a secure one-way hash (SHA-256) of the complete API key.
+ * Never stores, prints, or logs the raw API key.
+ */
+export async function computeApiKeyHash(apiKey: string): Promise<string> {
+  const clean = apiKey.trim();
+  if (!clean) return "";
+
+  if (typeof crypto !== "undefined" && crypto.subtle && typeof crypto.subtle.digest === "function") {
+    try {
+      const msgUint8 = new TextEncoder().encode(clean);
+      const hashBuffer = await crypto.subtle.digest("SHA-256", msgUint8);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+    } catch {
+      // Fallback to pure JS 64-bit FNV-1a if subtle digest fails
+    }
+  }
+
+  // Pure JS 64-bit FNV-1a non-reversible hash fallback
+  let h1 = 0x811c9dc5;
+  let h2 = 0x811c9dc5;
+  for (let i = 0; i < clean.length; i++) {
+    const ch = clean.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 0x01000193);
+    h2 = Math.imul(h2 ^ (ch << 1), 0x01000193);
+  }
+  return `fnv_${(h1 >>> 0).toString(16)}_${(h2 >>> 0).toString(16)}`;
+}
 
 /**
  * Known deprecated or decommissioned models that should never be selected or used.
@@ -44,7 +83,13 @@ export function markModelUnavailable(model: string): void {
     const cached = getCachedDiscoveredModels();
     const updated = cached.filter((m) => m !== clean);
     if (updated.length !== cached.length) {
-      cacheDiscoveredModels(updated);
+      const raw = localStorage.getItem(DISCOVERED_MODELS_STORAGE);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object" && "apiKeyHash" in parsed) {
+          cacheDiscoveredModels(parsed.apiKeyHash, updated);
+        }
+      }
     }
   } catch {
     // Ignore storage errors
@@ -98,63 +143,141 @@ export function setStoredSelectedModel(model: string): void {
   }
 }
 
-export function getCachedDiscoveredModels(): string[] {
+/**
+ * Returns discovered models strictly matching the given API key hash.
+ * If no key hash is provided or if the stored cache belongs to a different key,
+ * returns an empty array. Never returns unverified fallback assumptions.
+ */
+export function getCachedDiscoveredModels(expectedApiKeyHash?: string): string[] {
   try {
     const raw = localStorage.getItem(DISCOVERED_MODELS_STORAGE);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        // Filter out any deprecated or session-unavailable models
-        const filtered = parsed
-          .map((m: unknown) => (typeof m === "string" ? m.trim() : ""))
-          .filter((m: string) => m && !isModelUnavailable(m));
-        if (filtered.length > 0) {
-          return filtered;
-        }
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && Array.isArray(parsed.models)) {
+      const payload = parsed as DiscoveredCachePayload;
+      if (expectedApiKeyHash && payload.apiKeyHash !== expectedApiKeyHash) {
+        // Cache belongs to a different API key: do not use it
+        return [];
       }
+      if (payload.timestamp && Date.now() - payload.timestamp > DISCOVERY_CACHE_TTL_MS) {
+        // Cache is expired: do not use it
+        return [];
+      }
+      return payload.models
+        .map((m: unknown) => (typeof m === "string" ? m.trim() : ""))
+        .filter((m: string) => m && !isModelUnavailable(m));
+    }
+
+    // Legacy format migration (raw string[])
+    if (Array.isArray(parsed)) {
+      if (expectedApiKeyHash) {
+        // Cannot verify this legacy cache belongs to this key
+        return [];
+      }
+      return parsed
+        .map((m: unknown) => (typeof m === "string" ? m.trim() : ""))
+        .filter((m: string) => m && !isModelUnavailable(m));
     }
   } catch {
     // Ignore parse error
   }
-  // Safe default fallback list with modern models only (no gemini-1.5-flash)
-  return ["gemini-2.5-flash", "gemini-2.0-flash"];
+  return [];
 }
 
-export function cacheDiscoveredModels(models: string[]): void {
+export function cacheDiscoveredModels(apiKeyHash: string, models: string[]): void {
   try {
     const cleanList = models
       .map((m) => m.trim())
       .filter((m) => m && !isModelUnavailable(m));
-    localStorage.setItem(DISCOVERED_MODELS_STORAGE, JSON.stringify(cleanList));
+    const payload: DiscoveredCachePayload = {
+      apiKeyHash,
+      models: cleanList,
+      timestamp: Date.now(),
+    };
+    localStorage.setItem(DISCOVERED_MODELS_STORAGE, JSON.stringify(payload));
+    memoryCache = payload;
   } catch (err) {
     console.warn("[KEO] Failed to cache discovered models:", err);
   }
 }
 
-// In-memory discovery cache to prevent spamming Google's models.list on every message
-let lastDiscoveryTime = 0;
-let inFlightDiscovery: Promise<string[]> | null = null;
-const DISCOVERY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+// In-memory discovery cache to prevent disk reads and duplicate requests
+let memoryCache: DiscoveredCachePayload | null = null;
+const inFlightDiscoveries = new Map<string, Promise<string[]>>();
+export const DISCOVERY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Invalidates old cached models and pending discoveries.
+ * If a new API key is provided, clears cache only if the existing cache belonged to a different key.
+ */
+export async function invalidateDiscoveryCache(newApiKey?: string): Promise<void> {
+  inFlightDiscoveries.clear();
+  memoryCache = null;
+
+  if (newApiKey) {
+    const newHash = await computeApiKeyHash(newApiKey);
+    const existing = localStorage.getItem(DISCOVERED_MODELS_STORAGE);
+    if (existing) {
+      try {
+        const parsed = JSON.parse(existing) as DiscoveredCachePayload;
+        if (parsed.apiKeyHash && parsed.apiKeyHash !== newHash) {
+          localStorage.removeItem(DISCOVERED_MODELS_STORAGE);
+          localStorage.removeItem(SELECTED_MODEL_STORAGE);
+        }
+      } catch {
+        localStorage.removeItem(DISCOVERED_MODELS_STORAGE);
+      }
+    }
+  } else {
+    try {
+      localStorage.removeItem(DISCOVERED_MODELS_STORAGE);
+      localStorage.removeItem(SELECTED_MODEL_STORAGE);
+    } catch {
+      // Ignore
+    }
+  }
+
+  resetUnavailableModels();
+}
 
 /**
  * Calls official Gemini API models.list endpoint using the user's API key.
  * Discovers models actually available to that specific key supporting generateContent.
+ * Cache is strictly isolated by full API key SHA-256 hash.
  */
 export async function discoverGeminiModels(apiKey: string, forceRefresh = false): Promise<string[]> {
   const cleanKey = apiKey.trim();
-  if (!cleanKey) return ["gemini-2.5-flash", "gemini-2.0-flash"];
+  if (!cleanKey) {
+    throw new Error("No Gemini API key provided. Please configure your key in Settings.");
+  }
 
+  const keyHash = await computeApiKeyHash(cleanKey);
   const now = Date.now();
-  if (!forceRefresh && lastDiscoveryTime > 0 && now - lastDiscoveryTime < DISCOVERY_CACHE_TTL_MS) {
-    const cached = getCachedDiscoveredModels();
-    if (cached.length > 0) return cached;
+
+  // 1. Check in-memory cache for this exact key hash
+  if (!forceRefresh && memoryCache && memoryCache.apiKeyHash === keyHash) {
+    if (now - memoryCache.timestamp < DISCOVERY_CACHE_TTL_MS) {
+      const valid = memoryCache.models.filter((m) => !isModelUnavailable(m));
+      if (valid.length > 0) return valid;
+    }
   }
 
-  if (inFlightDiscovery && !forceRefresh) {
-    return inFlightDiscovery;
+  // 2. Check localStorage cache for this exact key hash
+  if (!forceRefresh) {
+    const cached = getCachedDiscoveredModels(keyHash);
+    if (cached.length > 0) {
+      memoryCache = { apiKeyHash: keyHash, models: cached, timestamp: now };
+      return cached;
+    }
   }
 
-  inFlightDiscovery = (async () => {
+  // 3. Return existing in-flight promise for this exact key hash (prevent duplicate concurrent network calls)
+  if (!forceRefresh && inFlightDiscoveries.has(keyHash)) {
+    return inFlightDiscoveries.get(keyHash)!;
+  }
+
+  const discoveryPromise = (async () => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(cleanKey)}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 12000);
@@ -164,12 +287,22 @@ export async function discoverGeminiModels(apiKey: string, forceRefresh = false)
       console.log("[KEO Model Discovery] Querying official Google Gemini models.list endpoint...");
       res = await fetch(url, { method: "GET", signal: controller.signal });
     } catch (fetchErr) {
-      if (controller.signal.aborted) {
-        throw new Error("Connection to Google Gemini timed out (12s). Check your internet connection.");
+      clearTimeout(timer);
+      const isAbort = controller.signal.aborted;
+      const detail = isAbort
+        ? "Connection to Google Gemini timed out (12s)."
+        : fetchErr instanceof Error
+        ? fetchErr.message
+        : "Network error";
+
+      // If we have cached models for this key, fall back gracefully to them on transient network drop
+      const fallbackCached = getCachedDiscoveredModels(keyHash);
+      if (fallbackCached.length > 0) {
+        console.warn(`[KEO Model Discovery] Discovery fetch failed (${detail}). Using existing verified models for this key.`);
+        return fallbackCached;
       }
-      throw new Error(
-        `Could not connect to Google Gemini (${fetchErr instanceof Error ? fetchErr.message : "Network error"}). Check your internet connection.`
-      );
+
+      throw new Error(`Unable to verify available Gemini models for your API key (${detail}). Please check your internet connection.`);
     } finally {
       clearTimeout(timer);
     }
@@ -179,10 +312,18 @@ export async function discoverGeminiModels(apiKey: string, forceRefresh = false)
       const msg = data?.error?.message || `HTTP ${res.status}`;
       if (res.status === 400 || res.status === 401 || res.status === 403) {
         if (msg.includes("API_KEY_INVALID") || msg.toLowerCase().includes("not valid") || msg.toLowerCase().includes("invalid api key")) {
-          throw new Error("Invalid Gemini API key. Google reported API_KEY_INVALID. Please get a free key at https://aistudio.google.com/app/apikey.");
+          throw new Error("Invalid Gemini API key. Google reported API_KEY_INVALID. Please get a valid key at https://aistudio.google.com/app/apikey.");
         }
         throw new Error(`Google rejected the API key: ${msg}`);
       }
+
+      // Check for cached models on other non-auth errors
+      const fallbackCached = getCachedDiscoveredModels(keyHash);
+      if (fallbackCached.length > 0) {
+        console.warn(`[KEO Model Discovery] HTTP error ${res.status}. Using existing verified models for this key.`);
+        return fallbackCached;
+      }
+
       throw new Error(`Gemini model discovery failed: ${msg}`);
     }
 
@@ -215,10 +356,10 @@ export async function discoverGeminiModels(apiKey: string, forceRefresh = false)
     }
 
     if (compatibleModels.length === 0) {
-      throw new Error("No compatible Gemini text generation models were found for this API key.");
+      throw new Error("No compatible Gemini text generation models were found for this API key. Check model access permissions in Google AI Studio.");
     }
 
-    // Sort/Prioritize: prefer latest flash models (3.x, 2.5, 2.0), then general flash, then pro
+    // Sort/Prioritize: modern flash first (2.5-flash, 2.0-flash, other flash), then pro
     compatibleModels.sort((a, b) => {
       const score = (name: string) => {
         const l = name.toLowerCase();
@@ -233,8 +374,7 @@ export async function discoverGeminiModels(apiKey: string, forceRefresh = false)
       return score(b) - score(a);
     });
 
-    lastDiscoveryTime = Date.now();
-    cacheDiscoveredModels(compatibleModels);
+    cacheDiscoveredModels(keyHash, compatibleModels);
     console.log(`[KEO Model Discovery] Discovered ${compatibleModels.length} compatible models: ${compatibleModels.join(", ")}`);
 
     // If stored selected model is not in compatible models, clear it
@@ -244,21 +384,22 @@ export async function discoverGeminiModels(apiKey: string, forceRefresh = false)
     }
 
     return compatibleModels;
-  })()
-    .finally(() => {
-      inFlightDiscovery = null;
-    });
+  })().finally(() => {
+    inFlightDiscoveries.delete(keyHash);
+  });
 
-  return inFlightDiscovery;
+  inFlightDiscoveries.set(keyHash, discoveryPromise);
+  return discoveryPromise;
 }
 
 /**
  * Selects the best supported stable Flash model automatically from discovered list.
  * Never selects deprecated models or models marked unavailable.
+ * Returns empty string if no valid models exist in list.
  */
 export function selectBestFlashModel(models: string[]): string {
   const validModels = (models || []).filter((m) => m && !isModelUnavailable(m));
-  if (validModels.length === 0) return "gemini-2.5-flash";
+  if (validModels.length === 0) return "";
 
   // 1. Strict priority: gemini-2.5-flash (fastest stable flash)
   const flash25 = validModels.find((m) => m.toLowerCase().includes("2.5-flash") && !m.toLowerCase().includes("exp"));
@@ -281,64 +422,89 @@ export function selectBestFlashModel(models: string[]): string {
 }
 
 /**
- * Gets the current effective model, validating stored preference against available models.
+ * Gets the current effective model, validating stored preference against verified models for this key.
  */
 export async function getEffectiveModel(apiKey: string | null, forceRefresh = false): Promise<string> {
-  const cached = getCachedDiscoveredModels();
+  if (!apiKey || !apiKey.trim()) {
+    throw new Error("No Gemini API key provided. Please configure your key in Settings.");
+  }
+
+  const cleanKey = apiKey.trim();
+  const keyHash = await computeApiKeyHash(cleanKey);
+  const cached = getCachedDiscoveredModels(keyHash);
 
   const selected = getStoredSelectedModel();
   if (selected && !isModelUnavailable(selected)) {
-    // If we have cached models, confirm that the stored model is part of it
     if (cached.length === 0 || cached.includes(selected)) {
       return selected;
     }
-    // Stored model is not in cached discovered list; clear stale selection
     clearStoredSelectedModel();
   }
 
-  // 1. Fast path: Use cached discovered models immediately if valid
-  if (cached && cached.length > 0 && !forceRefresh) {
-    if (apiKey) {
-      // Refresh cache in background if stale without blocking current turn
-      void discoverGeminiModels(apiKey).catch(() => {});
-    }
+  // 1. Fast path: Use cached verified models if valid and not force refresh
+  if (cached.length > 0 && !forceRefresh) {
     const chosen = selectBestFlashModel(cached);
-    console.log(`[KEO Model Selection] Using cached effective model: ${chosen}`);
-    return chosen;
+    if (chosen) {
+      console.log(`[KEO Model Selection] Using cached effective model: ${chosen}`);
+      return chosen;
+    }
   }
 
-  // 2. Query Gemini models.list if no cache or forced refresh
-  if (apiKey) {
-    try {
-      const discovered = await discoverGeminiModels(apiKey, forceRefresh);
-      const chosen = selectBestFlashModel(discovered);
+  // 2. Query Gemini models.list
+  try {
+    const discovered = await discoverGeminiModels(cleanKey, forceRefresh);
+    const chosen = selectBestFlashModel(discovered);
+    if (chosen) {
       console.log(`[KEO Model Selection] Using freshly discovered effective model: ${chosen}`);
       return chosen;
-    } catch (err) {
-      console.warn("[KEO Model Selection] Discovery failed, falling back to cache:", err);
     }
+  } catch (err) {
+    if (cached.length > 0) {
+      const chosen = selectBestFlashModel(cached);
+      if (chosen) return chosen;
+    }
+    throw new Error(
+      `Could not determine an active Gemini model for your API key (${err instanceof Error ? err.message : "Discovery failed"}). Please verify your key in Settings.`
+    );
   }
 
-  const fallback = selectBestFlashModel(cached);
-  console.log(`[KEO Model Selection] Fallback model: ${fallback}`);
-  return fallback;
+  throw new Error("No verified Gemini models found. Please check your API key in Settings.");
 }
 
 /**
  * Returns an ordered priority list of available models to attempt for a request.
  * Excludes any model that has returned 404 in the current session.
+ * Throws a clear actionable error if discovery fails and no verified fallback exists.
  */
 export async function getAvailableModelsToTry(apiKey: string, forceRefresh = false): Promise<string[]> {
+  const cleanKey = apiKey.trim();
+  if (!cleanKey) {
+    throw new Error("Gemini API key is missing. Please add your API key in Settings.");
+  }
+
+  const keyHash = await computeApiKeyHash(cleanKey);
   let list: string[] = [];
 
   try {
-    list = await discoverGeminiModels(apiKey, forceRefresh);
-  } catch {
-    list = getCachedDiscoveredModels();
+    list = await discoverGeminiModels(cleanKey, forceRefresh);
+  } catch (err) {
+    list = getCachedDiscoveredModels(keyHash);
+    if (list.length === 0) {
+      const detail = err instanceof Error ? err.message : "Network error";
+      throw new Error(
+        `Unable to verify available Gemini models for your API key (${detail}). Please check your network connection or verify your API key in Settings.`
+      );
+    }
+    console.warn("[KEO Model Selection] Fresh discovery failed, using previously verified models for this key:", err);
   }
 
   // Filter out any models marked unavailable
   const filtered = list.filter((m) => !isModelUnavailable(m));
+  if (filtered.length === 0) {
+    throw new Error(
+      "All discovered models for this API key returned unavailable (404). Please verify your key and model quotas in Google AI Studio."
+    );
+  }
 
   const stored = getStoredSelectedModel();
   const modelsToTry: string[] = [];
@@ -350,7 +516,7 @@ export async function getAvailableModelsToTry(apiKey: string, forceRefresh = fal
 
   // Add the best flash model
   const bestFlash = selectBestFlashModel(filtered);
-  if (!modelsToTry.includes(bestFlash)) {
+  if (bestFlash && !modelsToTry.includes(bestFlash)) {
     modelsToTry.push(bestFlash);
   }
 
@@ -359,11 +525,6 @@ export async function getAvailableModelsToTry(apiKey: string, forceRefresh = fal
     if (!modelsToTry.includes(m)) {
       modelsToTry.push(m);
     }
-  }
-
-  // Emergency safety default if all were filtered out
-  if (modelsToTry.length === 0) {
-    modelsToTry.push("gemini-2.5-flash");
   }
 
   console.log(`[KEO Model Selection] Models to try in order: ${modelsToTry.join(", ")}`);

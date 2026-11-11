@@ -1,4 +1,10 @@
-import { discoverGeminiModels, selectBestFlashModel, setStoredSelectedModel, resetUnavailableModels } from "@/services/modelDiscovery";
+import {
+  discoverGeminiModels,
+  selectBestFlashModel,
+  setStoredSelectedModel,
+  resetUnavailableModels,
+  invalidateDiscoveryCache,
+} from "@/services/modelDiscovery";
 
 export interface ProviderKeyStatus {
   configured: boolean;
@@ -70,15 +76,18 @@ export async function fetchProviderKeyStatus(): Promise<ProviderKeyStatus> {
 export async function saveProviderKey(apiKey: string): Promise<ProviderKeyStatus> {
   const cleaned = apiKey.trim();
 
-  // Reset any previous 404 blocklist for the new key
+  // Reset any previous 404 blocklist and invalidate old cache for different keys
   resetUnavailableModels();
+  await invalidateDiscoveryCache(cleaned);
 
   // 1. Validate the key and discover available models specific to this key
   const discoveredModels = await verifyGeminiKey(cleaned);
 
   // 2. Automatically select and set the best supported stable Flash model
   const bestModel = selectBestFlashModel(discoveredModels);
-  setStoredSelectedModel(bestModel);
+  if (bestModel) {
+    setStoredSelectedModel(bestModel);
+  }
 
   try {
     localStorage.setItem(LOCAL_KEY_STORAGE, cleaned);
@@ -98,6 +107,7 @@ export async function removeProviderKey(): Promise<void> {
     localStorage.removeItem(LOCAL_KEY_STORAGE);
     localStorage.removeItem("keo_user_selected_model");
     localStorage.removeItem("keo_discovered_models");
+    await invalidateDiscoveryCache();
   } catch (err) {
     console.warn("[KEO] Failed to remove key from local device storage:", err);
   }

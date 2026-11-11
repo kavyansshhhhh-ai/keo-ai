@@ -15,13 +15,31 @@ const DEFAULT_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"] as const;
 const ATTEMPT_TIMEOUT_MS = 30_000;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 
+const sessionUnavailableModels = new Set<string>();
 let cachedModels: { list: string[]; timestamp: number; keyHash: string } | null = null;
 
-async function getDiscoveredModels(apiKey: string): Promise<string[]> {
+async function computeKeyHash(key: string): Promise<string> {
+  const clean = key.trim();
+  if (!clean) return "";
+  try {
+    const msgUint8 = new TextEncoder().encode(clean);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", msgUint8);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < clean.length; i++) {
+      h = Math.imul(h ^ clean.charCodeAt(i), 0x01000193);
+    }
+    return `h_${(h >>> 0).toString(16)}`;
+  }
+}
+
+async function getDiscoveredModels(apiKey: string, forceRefresh = false): Promise<string[]> {
   const now = Date.now();
-  const keyHash = apiKey.slice(-6);
-  if (cachedModels && cachedModels.keyHash === keyHash && now - cachedModels.timestamp < CACHE_TTL_MS) {
-    return cachedModels.list;
+  const keyHash = await computeKeyHash(apiKey);
+  if (!forceRefresh && cachedModels && cachedModels.keyHash === keyHash && now - cachedModels.timestamp < CACHE_TTL_MS) {
+    return cachedModels.list.filter((m) => !sessionUnavailableModels.has(m));
   }
 
   try {
@@ -38,7 +56,8 @@ async function getDiscoveredModels(apiKey: string): Promise<string[]> {
           return (
             methods.includes("generateContent") &&
             !DEPRECATED_MODELS.has(id) &&
-            !id.includes("1.5-flash")
+            !id.includes("1.5-flash") &&
+            !sessionUnavailableModels.has(id)
           );
         })
         .map((m) => (m.name || "").replace(/^models\//, ""));
@@ -59,10 +78,14 @@ async function getDiscoveredModels(apiKey: string): Promise<string[]> {
       }
     }
   } catch (err) {
-    console.warn("[KEO Supabase Gemini] Model discovery failed, using safe defaults:", err);
+    console.warn("[KEO Supabase Gemini] Model discovery failed:", err);
   }
 
-  return [...DEFAULT_MODELS];
+  if (cachedModels && cachedModels.keyHash === keyHash) {
+    return cachedModels.list.filter((m) => !sessionUnavailableModels.has(m));
+  }
+
+  return DEFAULT_MODELS.filter((m) => !sessionUnavailableModels.has(m));
 }
 
 const endpointFor = (model: string) =>
@@ -102,7 +125,7 @@ function classifyFailure(model: string, status: number, body: string): ProviderE
     return new ProviderError(`Gemini rejected the API key: ${reason}`, 401, false);
   }
   if (status === 404) {
-    return new ProviderError(`Gemini could not find model ${model}: ${reason}`, 502, true);
+    return new ProviderError(`Gemini could not find model ${model}: ${reason}`, 404, true);
   }
   if (status === 429) {
     return new ProviderError(`Gemini rate limit reached: ${reason}`, 429, true);
@@ -132,16 +155,58 @@ async function openModelStream(model: string, body: string, apiKey: string, sign
 }
 
 async function openStream(body: string, apiKey: string, signal: AbortSignal): Promise<Response> {
-  const models = await getDiscoveredModels(apiKey);
+  let models = await getDiscoveredModels(apiKey);
+  if (models.length === 0) {
+    models = await getDiscoveredModels(apiKey, true);
+  }
+  if (models.length === 0) {
+    throw new ProviderError("No compatible or available Gemini models found for this API key.", 502, false);
+  }
+
+  const triedModels = new Set<string>();
+  let refreshedDiscovery = false;
   let lastError: ProviderError | null = null;
-  for (const model of models) {
+
+  for (let i = 0; i < models.length; i++) {
+    const model = models[i];
+    if (triedModels.has(model)) continue;
+    triedModels.add(model);
+
     try {
       return await openModelStream(model, body, apiKey, signal);
     } catch (err) {
-      if (!(err instanceof ProviderError) || !err.retryable) throw err;
+      if (!(err instanceof ProviderError)) throw err;
+
+      // Handle HTTP 404: quarantine model permanently and refresh discovery once to find new models
+      if (err.status === 404) {
+        sessionUnavailableModels.add(model);
+        lastError = err;
+
+        if (!refreshedDiscovery) {
+          refreshedDiscovery = true;
+          try {
+            console.log(`[KEO Supabase Gemini] Model ${model} returned 404. Refreshing model discovery once...`);
+            const fresh = await getDiscoveredModels(apiKey, true);
+            for (const fm of fresh) {
+              if (!sessionUnavailableModels.has(fm) && !triedModels.has(fm) && !models.includes(fm)) {
+                models.push(fm);
+              }
+            }
+          } catch {
+            // Ignore refresh error
+          }
+        }
+        continue;
+      }
+
+      // Do NOT treat 429, 401, 403, or network failures as model-not-found errors
+      if (!err.retryable) {
+        throw err;
+      }
       lastError = err;
     }
   }
+
   throw lastError ?? new ProviderError("The AI service did not respond.", 503, true);
 }
 
