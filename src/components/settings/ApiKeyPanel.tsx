@@ -6,9 +6,12 @@ import {
   getCachedDiscoveredModels,
   getStoredSelectedModel,
   setStoredSelectedModel,
+  discoverGeminiModels,
+  selectBestFlashModel,
 } from "@/services/modelDiscovery";
 import {
   fetchProviderKeyStatus,
+  getLocalApiKey,
   removeProviderKey,
   saveProviderKey,
   type ProviderKeyStatus,
@@ -37,7 +40,11 @@ export function ApiKeyPanel() {
         const models = getCachedDiscoveredModels();
         setAvailableModels(models);
         const sel = getStoredSelectedModel();
-        setSelectedModel(sel || models[0] || "gemini-2.5-flash");
+        const validSelected = sel && models.includes(sel) ? sel : (models[0] || selectBestFlashModel(models));
+        setSelectedModel(validSelected);
+        if (sel !== validSelected) {
+          setStoredSelectedModel(validSelected);
+        }
       }
     } catch (err) {
       setLoadError(errorMessage(err, "Could not check the API key."));
@@ -198,6 +205,33 @@ export function ApiKeyPanel() {
     setStoredSelectedModel(model);
   };
 
+  const handleRecheckModels = async () => {
+    if (pending) return;
+    setPending("verifying");
+    setActionError(null);
+    setSuccessMessage(null);
+    try {
+      const apiKey = getLocalApiKey() || draft.trim();
+      if (!apiKey) {
+        setActionError("No active API key found to check models. Please enter your Gemini API key.");
+        return;
+      }
+      const models = await discoverGeminiModels(apiKey, true);
+      setAvailableModels(models);
+      const sel = getStoredSelectedModel();
+      const validSelected = sel && models.includes(sel) ? sel : (models[0] || selectBestFlashModel(models));
+      setSelectedModel(validSelected);
+      if (sel !== validSelected) {
+        setStoredSelectedModel(validSelected);
+      }
+      setSuccessMessage(`✓ Discovered ${models.length} active Gemini models. Active model: ${validSelected}`);
+    } catch (err) {
+      setActionError(errorMessage(err, "Failed to refresh Gemini models list."));
+    } finally {
+      setPending(null);
+    }
+  };
+
   if (loadError) {
     return (
       <div role="alert" className="flex flex-col gap-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -257,7 +291,7 @@ export function ApiKeyPanel() {
             </div>
             <button
               type="button"
-              onClick={() => void handleVerify()}
+              onClick={() => void handleRecheckModels()}
               disabled={pending !== null}
               className="text-[11px] text-cyan-400 hover:underline flex items-center gap-1"
             >

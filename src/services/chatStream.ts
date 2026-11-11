@@ -1,6 +1,12 @@
 import { FUNCTIONS_URL, SUPABASE_ANON_KEY } from "@/lib/supabase";
 import { getEffectiveApiKey } from "@/services/providerKeyService";
-import { getStoredSelectedModel, getCachedDiscoveredModels, selectBestFlashModel } from "@/services/modelDiscovery";
+import {
+  getAvailableModelsToTry,
+  getEffectiveModel,
+  markModelUnavailable,
+  discoverGeminiModels,
+  isModelUnavailable,
+} from "@/services/modelDiscovery";
 import { perfTracker } from "@/services/performanceTracker";
 import type { ChatMode, Language } from "@/types/chat";
 
@@ -153,15 +159,10 @@ async function streamFromGeminiDirect(
 ): Promise<string> {
   const systemPrompt = buildSystemPrompt(options.mode, options.language);
 
-  // EXTREME SPEED MODEL SELECTION:
-  // Fast direct resolution: Stored preference -> Cached best flash model -> Hardcoded gemini-2.5-flash
-  const cached = getCachedDiscoveredModels();
-  const primaryModel = getStoredSelectedModel() || selectBestFlashModel(cached) || "gemini-2.5-flash";
-
-  // Single fallback model if primary model fails with 404
-  const modelsToTry = primaryModel === "gemini-2.5-flash"
-    ? ["gemini-2.5-flash", "gemini-1.5-flash"]
-    : [primaryModel, "gemini-2.5-flash", "gemini-1.5-flash"];
+  // DYNAMIC MODEL SELECTION:
+  // Discovers valid models for this user's API key, prioritizes best Flash model,
+  // and filters out any models that previously returned 404 in this session.
+  let modelsToTry = await getAvailableModelsToTry(apiKey);
 
   // Normalize turns: Google Gemini STRICTLY requires alternating user -> model -> user turns.
   // Truncate to last 8 turns max to minimize token payload overhead
@@ -197,13 +198,16 @@ async function streamFromGeminiDirect(
   };
 
   let lastError: Error | null = null;
+  let didForceRefresh = false;
 
-  for (const model of modelsToTry) {
+  for (let i = 0; i < modelsToTry.length; i++) {
+    const model = modelsToTry[i];
     if (options.signal.aborted) {
       throw new Error("Generation cancelled by user.");
     }
 
     perfTracker.startRequest(model);
+    console.log(`[KEO Stream] Requesting stream from Gemini API using model: ${model}`);
 
     try {
       const streamEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(
@@ -222,7 +226,24 @@ async function streamFromGeminiDirect(
       );
 
       if (response.status === 404) {
+        markModelUnavailable(model);
+        console.warn(`[KEO Stream] Model '${model}' returned HTTP 404 (unavailable). Trying next available model...`);
         lastError = new Error(`Model ${model} is unavailable.`);
+
+        // If we exhausted modelsToTry, force refresh discovery list to see if new models exist
+        if (i === modelsToTry.length - 1 && !didForceRefresh) {
+          didForceRefresh = true;
+          console.log("[KEO Stream] Refreshing Gemini model discovery list after 404 response...");
+          try {
+            const refreshed = await discoverGeminiModels(apiKey, true);
+            const remaining = refreshed.filter((m) => !isModelUnavailable(m) && !modelsToTry.includes(m));
+            if (remaining.length > 0) {
+              modelsToTry = [...modelsToTry, ...remaining];
+            }
+          } catch {
+            // Ignore refresh error
+          }
+        }
         continue; // Try next fallback model
       }
 
@@ -492,7 +513,7 @@ export async function checkAIProvider(): Promise<{ ok: boolean; message: string 
   const apiKey = getEffectiveApiKey();
   if (apiKey) {
     try {
-      const model = getStoredSelectedModel() || "gemini-2.5-flash";
+      const model = await getEffectiveModel(apiKey);
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}?key=${encodeURIComponent(apiKey)}`
       );
@@ -500,6 +521,9 @@ export async function checkAIProvider(): Promise<{ ok: boolean; message: string 
         return { ok: true, message: `Connected to Google Gemini (${model})` };
       }
       const data = await res.json().catch(() => null);
+      if (res.status === 404) {
+        markModelUnavailable(model);
+      }
       return { ok: false, message: data?.error?.message || `HTTP ${res.status}` };
     } catch {
       return { ok: false, message: "Could not reach Google Gemini. Check your connection." };

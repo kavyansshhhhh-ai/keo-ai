@@ -1,4 +1,4 @@
-import { discoverGeminiModels, selectBestFlashModel, setStoredSelectedModel } from "@/services/modelDiscovery";
+import { discoverGeminiModels, selectBestFlashModel, setStoredSelectedModel, resetUnavailableModels } from "@/services/modelDiscovery";
 
 export interface ProviderKeyStatus {
   configured: boolean;
@@ -44,7 +44,7 @@ export async function verifyGeminiKey(apiKey: string): Promise<string[]> {
   }
 
   // Discover and filter compatible models supporting generateContent for this specific key
-  const availableModels = await discoverGeminiModels(cleanKey);
+  const availableModels = await discoverGeminiModels(cleanKey, true);
   if (!availableModels || availableModels.length === 0) {
     throw new Error("No compatible Gemini models were found for this API key.");
   }
@@ -69,6 +69,9 @@ export async function fetchProviderKeyStatus(): Promise<ProviderKeyStatus> {
 
 export async function saveProviderKey(apiKey: string): Promise<ProviderKeyStatus> {
   const cleaned = apiKey.trim();
+
+  // Reset any previous 404 blocklist for the new key
+  resetUnavailableModels();
 
   // 1. Validate the key and discover available models specific to this key
   const discoveredModels = await verifyGeminiKey(cleaned);

@@ -1,8 +1,69 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { AIProvider, ProviderError, StreamRequest } from "./types.ts";
 
-const MODELS = ["gemini-2.5-flash", "gemini-1.5-flash"] as const;
+const DEPRECATED_MODELS = new Set([
+  "gemini-1.5-flash",
+  "gemini-1.5-flash-8b",
+  "gemini-1.5-flash-latest",
+  "gemini-1.5-flash-001",
+  "gemini-1.5-flash-002",
+  "gemini-1.0-pro",
+  "gemini-pro",
+]);
+
+const DEFAULT_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"] as const;
 const ATTEMPT_TIMEOUT_MS = 30_000;
+const CACHE_TTL_MS = 10 * 60 * 1000;
+
+let cachedModels: { list: string[]; timestamp: number; keyHash: string } | null = null;
+
+async function getDiscoveredModels(apiKey: string): Promise<string[]> {
+  const now = Date.now();
+  const keyHash = apiKey.slice(-6);
+  if (cachedModels && cachedModels.keyHash === keyHash && now - cachedModels.timestamp < CACHE_TTL_MS) {
+    return cachedModels.list;
+  }
+
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`, {
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { models?: Array<{ name?: string; supportedGenerationMethods?: string[] }> };
+      const valid = (data.models || [])
+        .filter((m) => {
+          const id = (m.name || "").replace(/^models\//, "");
+          const methods = m.supportedGenerationMethods || [];
+          return (
+            methods.includes("generateContent") &&
+            !DEPRECATED_MODELS.has(id) &&
+            !id.includes("1.5-flash")
+          );
+        })
+        .map((m) => (m.name || "").replace(/^models\//, ""));
+
+      // Prioritize modern Flash models
+      const sorted = valid.sort((a, b) => {
+        const aFlash = a.includes("flash") ? 1 : 0;
+        const bFlash = b.includes("flash") ? 1 : 0;
+        if (aFlash !== bFlash) return bFlash - aFlash;
+        if (a.includes("2.5") && !b.includes("2.5")) return -1;
+        if (!a.includes("2.5") && b.includes("2.5")) return 1;
+        return a.localeCompare(b);
+      });
+
+      if (sorted.length > 0) {
+        cachedModels = { list: sorted, timestamp: now, keyHash };
+        return sorted;
+      }
+    }
+  } catch (err) {
+    console.warn("[KEO Supabase Gemini] Model discovery failed, using safe defaults:", err);
+  }
+
+  return [...DEFAULT_MODELS];
+}
 
 const endpointFor = (model: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
@@ -71,8 +132,9 @@ async function openModelStream(model: string, body: string, apiKey: string, sign
 }
 
 async function openStream(body: string, apiKey: string, signal: AbortSignal): Promise<Response> {
+  const models = await getDiscoveredModels(apiKey);
   let lastError: ProviderError | null = null;
-  for (const model of MODELS) {
+  for (const model of models) {
     try {
       return await openModelStream(model, body, apiKey, signal);
     } catch (err) {
@@ -85,7 +147,7 @@ async function openStream(body: string, apiKey: string, signal: AbortSignal): Pr
 
 export const geminiProvider: AIProvider = {
   name: "gemini",
-  model: MODELS[0],
+  model: DEFAULT_MODELS[0],
   async resolveApiKey() {
     const { data, error } = await serviceClient()
       .from("provider_keys")
